@@ -108,8 +108,32 @@ Auto-managed by the cross-model-review plugin. To reset, run `/cross-model-reset
 
 - File created by: state-changing commands (`autonomous-on/off`, `skip`, `reset`, `review-now`), review/brainstorm-partner skill invocations, OR first ad-hoc Codex consultation.
 - File NOT created by: `/cross-model-status`, `/cross-model-setup`.
-- Frontmatter resume from design doc only consulted when state file is **absent** (truly fresh project, no prior interactions).
+- Frontmatter resume from design/plan doc only consulted when state file is **absent** (truly fresh project, no prior interactions).
 - If state file exists, it's authoritative — frontmatter not consulted.
+
+### Chain lifecycle field transitions
+
+The two chain-tracking fields (`chain_status` and `active_chain_branch`) follow these explicit rules. Implementation must wire each transition:
+
+**`chain_status` transitions:**
+
+| From → To | Trigger |
+|-----------|---------|
+| `null` → `in_progress` | First review of a chain fires (design-review, plan-review, OR impl-review — whichever establishes the chain) |
+| `in_progress` → `completed` | impl-review approves AND PR is opened (or branch is merged, detected via `gh pr list --head <branch>` if available) |
+| `in_progress` → `halted` | Autonomous-mode halt occurs (Section 9.6 conditions) |
+| `halted` → `in_progress` | User invokes `/cross-model-review-now <kind>` to resume the halted chain |
+| any → `null` | `active_chain_artifact` updates to a new chain (Section 9.2 transitions) OR `/cross-model-reset` invoked |
+
+**`active_chain_branch` transitions:**
+
+| From → To | Trigger |
+|-----------|---------|
+| `null` → `<current-branch>` | First review of a chain fires; record `git rev-parse --abbrev-ref HEAD` |
+| `<old-branch>` → `<new-branch>` | New chain established on a different branch (per Section 9.2 chain-update rules) |
+| any → `null` | `/cross-model-reset` invoked OR `active_chain_artifact` cleared |
+
+Boundary detection in Section 9.2 (branch-switch invalidates chain) reads `active_chain_branch` and compares to current branch. If different → clear chain; next review re-establishes.
 
 ### Pre-session activation precedence (autonomous mode)
 
@@ -298,14 +322,34 @@ Seven commands. All bootstrap state on first stateful action. Status and setup a
 | `/cross-model-review-now <kind>` | Manually invoke named flow. `<kind>` ∈ {design, plan, impl}. Bypasses duplicate-guard; bypasses skip without consuming it. Requires unambiguous artifact target. |
 | `/cross-model-setup` | First-run install: verify Codex MCP, print/apply CLAUDE.md additions, idempotent. |
 | `/cross-model-status` | Plain-language state report (Section 9.5). Read-only. |
-| `/cross-model-reset` | Write fresh-defaults state file. Suppresses frontmatter resume for current session. Does not touch design doc content. |
+| `/cross-model-reset` | Write fresh-defaults state file. Once written, frontmatter resume is suppressed (state file is present and authoritative) until either the next `/cross-model-reset` or manual deletion of the state file. Does not touch design/plan doc content; their `codex_thread_id` frontmatter remains as a fallback for *new* projects/installs but won't be consulted while the post-reset state file exists. |
 
-### 7.1 `/cross-model-review-now` ambiguity rules
+### 7.1 `/cross-model-review-now` resolver
 
-- Defaults to `state.active_chain_artifact` if set.
-- If multiple candidates within recent window OR none → asks (interactive) or halts with logged decision (autonomous).
-- Accepts explicit path: `/cross-model-review-now plan docs/plans/2026-04-29-foo.md`.
-- For `impl`: requires a feature branch with diff against base. On default branch → asks/halts.
+`active_chain_artifact` typically anchors to the *design* doc, but the three review kinds need different artifacts. Use this deterministic resolver to find the target artifact for each kind:
+
+**For `design`:**
+1. If `state.active_chain_artifact` matches `docs/plans/*-design.md` → use it.
+2. Else if explicit path passed (`/cross-model-review-now design <path>`) → use it; verify exists.
+3. Else search `docs/plans/` for the most recent `*-design.md` on the current branch; if exactly one in last 24h → use it. If zero or many → ask (interactive) / halt + log (autonomous).
+
+**For `plan`:**
+1. If explicit path passed → use it; verify exists.
+2. Else if `state.active_chain_artifact` matches `docs/plans/*-design.md` → derive plan path by stripping `-design` suffix. Look for `<stem>.md` or `<stem>-plan.md`. If exactly one exists → use it.
+3. Else if `state.active_chain_artifact` matches a plan doc (`*.md` without `-design` suffix, or `*-plan.md`) → use it directly (it is the plan).
+4. Else if `state.active_chain_artifact` is `branch:<branch-name>` → plan-review is N/A for anchorless chains; error: *"Anchorless impl-only chain — no plan doc to review. Use `/cross-model-review-now impl` instead."*
+5. Else search `docs/plans/` for the most recent plan-shaped doc; same disambiguation as design above.
+
+**For `impl`:**
+1. Must be on a feature branch (not default branch).
+2. Use `git diff <branch-base>..HEAD` (Section 6: branch-base = merge-base with default branch).
+3. If on default branch → ask (interactive) / halt + log (autonomous).
+4. If branch-base undeterminable → halt with note.
+
+**General rules:**
+- Manual invocation always bypasses duplicate-trigger guard.
+- Manual invocation does NOT consume `skip_next_review`.
+- Multiple candidates with no clear best → ask in interactive mode; halt + log in autonomous mode.
 
 ## 8. Code-detection heuristic
 
@@ -379,7 +423,7 @@ Plugin reads notes and applies during heuristic evaluation. No parser; Claude in
 
 - `/cross-model-skip` — one-shot suppress.
 - `/cross-model-review-now <kind>` — force-invoke.
-- Per-plan frontmatter `cross_model_review: false` — opts that artifact out.
+- Per-artifact frontmatter `cross_model_review: false` — opts that single artifact out of review. Works on **both** design docs (suppresses design-review for that doc) **and** plan docs (suppresses plan-review for that plan). Does not propagate up or down the chain — to opt the whole chain out, set the flag on each artifact independently and use `/cross-model-skip` for impl-review (which has no artifact frontmatter).
 
 ### 8.6 Autonomous-mode fallbacks
 
@@ -499,7 +543,7 @@ State storage:  PERSISTED  (.claude/cross-model-review.session.local.md)
 
 Mode:           INTERACTIVE  (autonomous mode OFF)
 
-Codex thread:   thread_abc123  (session-scoped, primed at 10:23)
+Codex thread:   thread_abc123  (project-scoped, durable until reset; primed at 10:23 on 2026-04-29)
 Active chain:   docs/plans/2026-04-29-search-feature-design.md
    Status:       ⏳ IN PROGRESS
    Last call:    11:45  (kind: plan-review)
@@ -532,12 +576,26 @@ Other halt scenarios (autonomous):
 
 Halt path: notify (chat + local PushNotification if available), write halt note to per-chain decisions file, open `--draft` PR if useful work was done, exit cleanly.
 
-### 9.7 Approval invalidation (hash-based)
+### 9.7 Approval invalidation (hash-based) and frontmatter persistence
 
-**Per-artifact approval state:**
-- Design doc frontmatter: `codex_design_review_status: approved` + `codex_design_review_approved_hash: <sha256>`
-- Plan doc frontmatter: analogous fields.
-- Impl-review approval: `state.impl_review_approved_sha = <git HEAD sha>` at approval time.
+**Per-artifact frontmatter (cross-session bridge):**
+
+Each design or plan doc reviewed by the plugin gets these auto-managed frontmatter fields:
+
+```yaml
+---
+codex_thread_id: thread_abc123                   # written on first review of this artifact;
+                                                 # used by frontmatter resume when state file is absent
+codex_design_review_status: approved             # only on design docs; set when design-review approves
+codex_design_review_approved_hash: <sha256>      # only on design docs
+codex_plan_review_status: approved               # only on plan docs; set when plan-review approves
+codex_plan_review_approved_hash: <sha256>        # only on plan docs
+---
+```
+
+`codex_thread_id` is the load-bearing field for frontmatter resume. Without it, the "fresh project, existing chain" path (state file deleted, project pulled to a new machine, etc.) has nothing to read.
+
+**Impl-review approval lives in state file** (no impl artifact): `state.impl_review_approved_sha = <git HEAD sha>` at approval time.
 
 **Hash computation:** SHA-256 of artifact body content with YAML frontmatter block stripped entirely. Excludes auto-managed `codex_*` fields by construction. Body changes invalidate; frontmatter changes don't.
 
@@ -547,6 +605,14 @@ Halt path: notify (chat + local PushNotification if available), write halt note 
 - Impl stale (HEAD moved) → just impl.
 
 `/cross-model-status` recomputes on each invocation; surfaces stale state explicitly.
+
+**Frontmatter resume mechanics (re-stated for clarity):**
+
+When state file is absent at bootstrap, the plugin's resume logic:
+1. Looks at the most recent design or plan doc in `docs/plans/` on the current branch.
+2. Reads its frontmatter; if `codex_thread_id` is present, attempts to resume that thread.
+3. If resume succeeds, writes a fresh state file with the resumed thread_id and the artifact path as `active_chain_artifact`.
+4. If resume fails (thread expired/rotated), falls back to fresh thread + universal priming + recovery handoff (Section 5.8).
 
 ### 9.8 Recovery from interruption
 
