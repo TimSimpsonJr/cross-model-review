@@ -1,0 +1,29 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Build artifacts
+dist/
+build/
+
+# Plugin runtime artifacts (created in target repos when this plugin runs)
+# Listed here for awareness — they will not appear in this plugin repo itself.
+# .claude/cross-model-review.session.local.md
+# .claude/cross-model-review/
