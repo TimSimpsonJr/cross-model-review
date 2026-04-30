@@ -1,0 +1,15 @@
+{
+  "name": "cross-model-review",
+  "version": "0.1.0",
+  "description": "Codex MCP integration for adversarial review of designs, plans, and implementations. Layers on Superpowers without modifying upstream skills. Supports overnight autonomous code-fix sessions.",
+  "author": {
+    "name": "Tim Simpson",
+    "email": "tim@timsimpsonjr.com"
+  },
+  "homepage": "https://github.com/TimSimpsonJr/cross-model-review",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TimSimpsonJr/cross-model-review"
+  },
+  "license": "MIT"
+}
