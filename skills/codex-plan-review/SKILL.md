@@ -114,14 +114,17 @@ say so explicitly and ask Claude to provide what you need.
    AND `(now - state.last_invocation) < 5 seconds` AND not manually
    invoked via `/cross-model-review-now` → exit early (silent dedupe).
 
-5. Compute code-detection heuristic (Section 6 of design doc) on the
+5. Compute code-detection heuristic (Section 8 of design doc) on the
    artifact's file list. Record the result (TRIGGER or SKIP) but do NOT
    exit yet.
 
-6. Apply active-chain anti-flip-flop guard:
-   - If `state.active_chain_artifact` is set AND the current trigger's
-     artifact is in that chain (per Section 9.2 stem-matching rules) →
-     OVERRIDE heuristic to TRIGGER regardless of step 5's result.
+6. Apply active-chain anti-flip-flop guard. This step reads the value of
+   `active_chain_artifact` as loaded in step 2 (the pre-update value;
+   the Chain update section below has not run yet):
+   - If the loaded `state.active_chain_artifact` is set AND the current
+     trigger's artifact is in that chain (per Section 9.2 stem-matching
+     rules) → OVERRIDE heuristic to TRIGGER regardless of step 5's
+     result.
    - Otherwise, the heuristic result stands.
 
 7. Now act on the (possibly overridden) result:
@@ -129,7 +132,46 @@ say so explicitly and ask Claude to provide what you need.
    - If SKIP → post chat note explaining why (heuristic outcome AND chain
      status), exit skill.
 
-After bootstrap, if active_chain_artifact updates this invocation (new chain), set the `chain_just_changed` flag for the MCP call below.
+## Chain update (compute before the MCP call)
+
+Bootstrap has exited with TRIGGER. Now compute the chain transition for
+this invocation per design doc Section 9.2. First capture
+`prev_active_chain_artifact = state.active_chain_artifact` (may be
+null) — this is the value Bootstrap step 6 used.
+
+Branch-mismatch precondition: if `state.active_chain_branch` is non-null
+AND differs from the current branch (`git rev-parse --abbrev-ref HEAD`),
+clear the chain first (`state.active_chain_artifact = null`,
+`state.active_chain_branch = null`) and then re-evaluate the transitions
+below as if `prev_active_chain_artifact` were null.
+
+Apply the transition for this invocation's mode:
+
+- **`design-review`:** always set
+  `state.active_chain_artifact = <design-doc-path>` and
+  `state.active_chain_branch = <current-branch>`. Set
+  `chain_just_changed = (prev_active_chain_artifact != <design-doc-path>)`.
+- **`plan-review` with `prev_active_chain_artifact == null`:** set
+  `state.active_chain_artifact = <plan-doc-path>`,
+  `state.active_chain_branch = <current-branch>`, and
+  `chain_just_changed = true`.
+- **`plan-review` with `prev_active_chain_artifact != null`:** compute
+  `stems_match(prev_active_chain_artifact, <plan-doc-path>)` per design
+  doc Section 9.2 (strip leading `YYYY-MM-DD-` date prefix, strip
+  trailing `-design`/`-plan`/`-impl` suffix, strip `.md` extension;
+  equal stems = match).
+  - If stems match → preserve `prev_active_chain_artifact`; set
+    `chain_just_changed = false`.
+  - If stems mismatch → set
+    `state.active_chain_artifact = <plan-doc-path>`,
+    `state.active_chain_branch = <current-branch>`, and
+    `chain_just_changed = true` (this is a new chain).
+
+Persist the updated state (PERSISTED mode: write
+`.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
+the in-context `[cmr-state: ...]` marker). The Codex MCP call below
+reads `chain_just_changed` to decide whether to prepend the
+`[CHAIN-BOUNDARY] ...` marker.
 
 ## Codex MCP call
 
