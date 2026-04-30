@@ -322,7 +322,7 @@ Seven commands. All bootstrap state on first stateful action. Status and setup a
 | `/cross-model-review-now <kind>` | Manually invoke named flow. `<kind>` ∈ {design, plan, impl}. Bypasses duplicate-guard; bypasses skip without consuming it. Requires unambiguous artifact target. |
 | `/cross-model-setup` | First-run install: verify Codex MCP, print/apply CLAUDE.md additions, idempotent. |
 | `/cross-model-status` | Plain-language state report (Section 9.5). Read-only. |
-| `/cross-model-reset` | Write fresh-defaults state file. Once written, frontmatter resume is suppressed (state file is present and authoritative) until either the next `/cross-model-reset` or manual deletion of the state file. Does not touch design/plan doc content; their `codex_thread_id` frontmatter remains as a fallback for *new* projects/installs but won't be consulted while the post-reset state file exists. |
+| `/cross-model-reset` | Write fresh-defaults state file. Frontmatter resume stays suppressed as long as the state file exists — including after this reset (the file remains, just with default values). The only path to re-enable frontmatter resume is **manual deletion of the state file**, which is rarely needed: typical users either let the existing state continue or invoke `/cross-model-reset` again to start a fresh chain in-place. Does not touch design/plan doc content; their `codex_thread_id` frontmatter persists as a fallback for *new* installs/projects without state files but won't be consulted while any state file exists locally. |
 
 ### 7.1 `/cross-model-review-now` resolver
 
@@ -608,11 +608,16 @@ codex_plan_review_approved_hash: <sha256>        # only on plan docs
 
 **Frontmatter resume mechanics (re-stated for clarity):**
 
-When state file is absent at bootstrap, the plugin's resume logic:
-1. Looks at the most recent design or plan doc in `docs/plans/` on the current branch.
-2. Reads its frontmatter; if `codex_thread_id` is present, attempts to resume that thread.
-3. If resume succeeds, writes a fresh state file with the resumed thread_id and the artifact path as `active_chain_artifact`.
-4. If resume fails (thread expired/rotated), falls back to fresh thread + universal priming + recovery handoff (Section 5.8).
+When state file is absent at bootstrap, the plugin's resume logic uses the **same disambiguation rules as `/cross-model-review-now`** (Section 7.1) to find a candidate artifact. Auto-resume happens only when the candidate is unambiguous:
+
+1. Search `docs/plans/` for design/plan docs on the current branch with a `codex_thread_id` in their frontmatter.
+2. Filter to candidates within a recent window (last 24 hours of file modification, OR matching the active branch's most-recent commits — whichever is more conservative).
+3. **If exactly one candidate** → attempt to resume that thread. On success, write a fresh state file with the resumed thread_id and the artifact path as `active_chain_artifact`. On failure (thread expired/rotated), fall back to fresh thread + universal priming + recovery handoff (Section 5.8).
+4. **If zero candidates** → start fresh thread; no resume needed.
+5. **If multiple candidates** → do NOT auto-resume. Start a new fresh thread, and post a chat note:
+   > *"Multiple design/plan docs in `docs/plans/` could match this branch. Not auto-resuming to avoid attaching to the wrong chain. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact, or just proceed — a fresh chain will be established on the next review."*
+
+This makes the recovery path safe in repos with multiple historical plan docs. Auto-resume only fires when the answer is obvious.
 
 ### 9.8 Recovery from interruption
 
