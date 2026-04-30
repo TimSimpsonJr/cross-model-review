@@ -1,6 +1,6 @@
 ---
 name: codex-brainstorm-partner
-description: Use during brainstorming when the user has explicitly opted in to having Codex stand in for the user role, OR when autonomous mode is active during a brainstorming session. Triggers on phrases like "let codex take over", "let's brainstorm with codex", "let codex weigh in", "ask codex about this".
+description: Use during brainstorming when the user has explicitly opted in to having Codex stand in for the user role, OR when autonomous mode is active during a brainstorming session. Triggers on phrases like "let codex take over", "let's brainstorm with codex", "let codex weigh in".
 ---
 
 # codex-brainstorm-partner

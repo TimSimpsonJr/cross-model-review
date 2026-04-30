@@ -8,6 +8,10 @@
 
 ---
 
+> **Note (post-implementation):** Task 16 took the hookify fallback path — backup-nudge rules ship via `/cross-model-setup` writing `.claude/hookify.cross-model-{plan,impl}-review.local.md` files into the host project. Native Claude Code hooks don't support transcript-pattern matching at Stop events, so any references below to `hooks/hooks.json` (e.g., Section 6, Section 11's layer summary, Section 14's implementation entry point) describe the original design intent. The shipped implementation routes Layer 3 through hookify rule files instead. See MANIFEST.md "Hookify rule delivery" bullet for details.
+
+---
+
 ## 1. Goal
 
 Integrate Codex (OpenAI's coding model, available as MCP) into the Superpowers workflow as an adversarial reviewer at three lifecycle moments and as an opt-in brainstorming partner. Eliminate the manual copy-paste handoff currently required between Claude and Codex during design and review steps. Enable overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval for code-only decisions.
