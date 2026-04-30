@@ -1,0 +1,18 @@
+{
+  "name": "cross-model-review",
+  "owner": {
+    "name": "Tim Simpson",
+    "email": "tim@timsimpsonjr.com",
+    "url": "https://github.com/TimSimpsonJr"
+  },
+  "plugins": [
+    {
+      "name": "cross-model-review",
+      "source": ".",
+      "description": "Codex MCP integration for adversarial review of designs, plans, and implementations.",
+      "version": "0.1.0",
+      "category": "development-workflow",
+      "tags": ["codex", "review", "superpowers", "autonomous"]
+    }
+  ]
+}
