@@ -143,16 +143,46 @@ The persisted/ephemeral split in step 1 means this skill works correctly in proj
 ```markdown
 ## Codex MCP call
 
-If `state.codex_thread_id` is null (first call this project):
-- Invoke `mcp__codex__codex` with:
-  - `cwd`: project root (via `git rev-parse --show-toplevel`)
-  - `sandbox`: "read-only"
-  - `prompt`: <Block A: Universal Codex priming> + "\n\n[MODE: <this-mode>]\n\n<artifact content>"
-- Capture `threadId` from response; write to `state.codex_thread_id`.
-- Write `codex_thread_id` to the artifact's frontmatter (design or plan doc
-  only — impl has no artifact).
+If `state.codex_thread_id` is null:
 
-Else (continuation):
+1. **Late-bound frontmatter resume check.** Before initiating a fresh
+   thread, look at the artifact this invocation is about to review:
+   - If the artifact is a design or plan doc with `codex_thread_id` in its
+     frontmatter → attempt to resume that thread first (try
+     `mcp__codex__codex-reply` with that threadId + bare content + mode
+     tag). On success: write that threadId into state, proceed as
+     continuation.
+   - If the artifact is a `branch:<branch>` anchor (anchorless impl-only)
+     OR has no frontmatter `codex_thread_id` → skip late-bound resume,
+     proceed to fresh-thread path.
+
+   This makes the manual recovery path work: when bootstrap left
+   `state.codex_thread_id` null because of ambiguous candidates, and the
+   user invokes `/cross-model-review-now <kind> <explicit-path>`, the MCP
+   layer reads that explicit artifact's frontmatter and resumes from it.
+   Same logic applies any time a review fires for an artifact whose
+   frontmatter has a thread_id but state doesn't.
+
+2. **Fresh-thread path (no frontmatter resume available, or resume failed):**
+   - Invoke `mcp__codex__codex` with:
+     - `cwd`: project root (via `git rev-parse --show-toplevel`)
+     - `sandbox`: "read-only"
+     - `prompt`: <Block A: Universal Codex priming> + "\n\n[MODE: <this-mode>]\n\n<artifact content>"
+   - If the late-bound resume in step 1 failed (thread expired), prepend
+     a recovery handoff to the priming:
+     "[RESUMING — previous Codex thread (id: <old-id>) could not be
+     resumed. Reconstructing context: active chain: <stem>, branch:
+     <branch>, last invocation kind: <kind>, approvals so far: <derived
+     from artifact frontmatter>, pending decisions: <count>. Previous
+     thread's discussion is unavailable. Treat current artifact content
+     as primary context.]"
+   - Capture `threadId` from response; write to `state.codex_thread_id`.
+   - Write `codex_thread_id` to the artifact's frontmatter (design or plan
+     doc — both, per the cross-machine-resume contract; impl has no
+     artifact).
+
+Else (state.codex_thread_id is set; continuation call):
+
 - If chain just changed (active_chain_artifact updated this invocation),
   prepend "[CHAIN-BOUNDARY] starting new task: <stem>; previous task: <old-stem>\n\n" to content.
 - Invoke `mcp__codex__codex-reply` with:
@@ -160,13 +190,9 @@ Else (continuation):
   - `prompt`: "[MODE: <this-mode>]\n\n<artifact content>"
 - If reply errors with thread-not-found / expired:
   - Reset `state.codex_thread_id = null`
-  - Re-invoke this section's first branch (mcp__codex__codex with priming).
-  - Add recovery handoff to the priming: "[RESUMING — previous Codex
-    thread (id: <old-id>) could not be resumed. Reconstructing context:
-    active chain: <stem>, branch: <branch>, last invocation kind:
-    <kind>, approvals so far: <derived from artifact frontmatter>,
-    pending decisions: <count>. Previous thread's discussion is
-    unavailable. Treat current artifact content as primary context.]"
+  - Re-enter this section's first branch (now-null state.codex_thread_id
+    will trigger late-bound frontmatter check, then fresh-thread path).
+  - The recovery handoff text above will be included in the priming.
 ```
 
 ### Block D: Response handling pattern
@@ -1157,22 +1183,22 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
 
 1. **Pure-read.** Do NOT create the state file if absent.
 
-2. Read `.claude/cross-model-review.session.local.md` if present.
+2. Resolve state in this order (matches Block B's storage-mode detection):
 
-3. Determine state-storage mode:
-   - File present → PERSISTED, surface frontmatter-resume implications.
-   - File absent → could be EPHEMERAL (read-only filesystem) or just "haven't done anything yet."
+   a. Read `.claude/cross-model-review.session.local.md` if present → PERSISTED state.
+   b. Else, scan recent conversation transcript for the most recent `[cmr-state: ...]` marker line written by a prior skill invocation in this session → EPHEMERAL state.
+   c. Else → NONE (no plugin activity yet in this project AND no in-context marker either).
 
-4. Compute approval state per design doc Section 9.7:
+3. Compute approval state per design doc Section 9.7:
    - For active chain (or anchorless impl-only chain), check artifact frontmatter for approval status + hash.
    - Compute current artifact body hash. If matches recorded → approved. Else → STALE.
    - Cascade staleness: design stale → plan + impl stale; plan stale → impl stale.
 
-5. Compute pending decisions count: read per-chain `decisions-<basename>.md` if exists, count entries with format `## decision-...`.
+4. Compute pending decisions count: read per-chain `decisions-<basename>.md` if exists, count entries with format `## decision-...`.
 
-6. Output the status block. Two formats:
+5. Output the status block. Three formats based on step 2 outcome:
 
-   **Persisted state with active chain:**
+   **PERSISTED state with active chain:**
 
    ```
    Cross-Model-Review Session Status
@@ -1200,14 +1226,47 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       <handle>: <one-line summary>
    ```
 
-   **No state file (truly fresh):**
+   **EPHEMERAL state (in-context marker found, no state file):**
 
    ```
    Cross-Model-Review Session Status
    ─────────────────────────────────
 
-   State storage:  NONE (state file does not exist; no Codex interactions yet in this project)
-      Frontmatter resume from docs/plans/ IS available for impl-review continuity.
+   State storage:  EPHEMERAL (in-conversation marker; no writable .claude/ directory)
+      State persists only for this conversation. No cross-session continuity.
+      Pending-decisions and per-chain files cannot be written; deferred items
+      surface in chat only.
+
+   Mode:           INTERACTIVE | AUTONOMOUS  (per marker)
+
+   Codex thread:   <thread_id>  (ephemeral; lives only in conversation context)
+   Active chain:   <marker.active_chain_artifact, if any>
+      Status:       ⏳ IN PROGRESS | ⏸️ HALTED (<reason>)  [COMPLETED rare in ephemeral]
+      Last call:    <marker.last_invocation>  (kind: <marker.last_invocation_kind>)
+
+   Approvals (active chain only):
+      [same format as PERSISTED, but hash-validation may be limited if
+       artifacts aren't readable]
+
+   Skip flag:      NOT ARMED | ARMED
+
+   Pending decisions: surfaced in chat (no decisions file in ephemeral mode)
+   ```
+
+   **NONE (no state file AND no in-context marker — truly fresh):**
+
+   ```
+   Cross-Model-Review Session Status
+   ─────────────────────────────────
+
+   State storage:  NONE
+      No persisted state file AND no in-conversation marker. No cross-model-review
+      activity has occurred yet in this project / session.
+
+      In a writable project: frontmatter resume from docs/plans/ IS available for
+      the next review (auto-resume only when exactly one candidate exists).
+      In a read-only / projectless context: future activity will run in EPHEMERAL
+      mode automatically.
 
    Mode:           — (defaults to interactive on first stateful action)
 
@@ -1216,7 +1275,7 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
    completing brainstorming/writing-plans/subagent-driven-development.
    ```
 
-7. Output is the only effect. No state changes.
+6. Output is the only effect. No state changes (still pure-read in all branches).
 ```
 
 **Step 2: Verify**
