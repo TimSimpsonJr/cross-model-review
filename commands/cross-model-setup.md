@@ -70,7 +70,10 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    enabled: true
    event: stop
    action: warn
-   pattern: (saved to docs/plans/|plan complete|design doc written)
+   conditions:
+     - field: transcript
+       operator: regex_match
+       pattern: (saved to docs/plans/|plan complete|design doc written)
    ---
 
    Reminder: a plan or design doc was recently saved to `docs/plans/`. If this is
@@ -91,7 +94,10 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    enabled: true
    event: stop
    action: warn
-   pattern: (all tasks complete|implementation complete|subagent-driven-development finished|ready to PR)
+   conditions:
+     - field: transcript
+       operator: regex_match
+       pattern: (all tasks complete|implementation complete|subagent-driven-development finished|ready to PR)
    ---
 
    Reminder: subagent-driven-development recently completed. Consider invoking
@@ -103,7 +109,6 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    ```
 
    Notes for the writer:
-   - Use hookify's simple top-level `pattern:` form (documented for `event: stop`). The conditions/field-array form was considered but the hookify schema docs only list `command`, `file_path`, `new_text`, `old_text`, `content`, and `user_prompt` as explicit field names — there's no documented `transcript` field for stop events, so the simple `pattern:` shorthand is the supported route.
    - Both rules use `action: warn` (the hookify default) so the nudge surfaces without blocking the agent stop. Skip-flag respect lives inside the message body — Claude reads it and consults `state.skip_next_review` before acting.
 
 7. **Suggest per-project notes (optional).** "If this project is a mixed-content repo (some content work, some code work — e.g., a website with a blog), add a per-project CLAUDE.md note. See README.md for an example."
