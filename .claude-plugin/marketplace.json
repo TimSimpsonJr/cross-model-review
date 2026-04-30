@@ -2,17 +2,17 @@
   "name": "cross-model-review",
   "owner": {
     "name": "Tim Simpson",
-    "email": "tim@timsimpsonjr.com",
-    "url": "https://github.com/TimSimpsonJr"
+    "email": "tim@timsimpsonjr.com"
+  },
+  "metadata": {
+    "description": "Codex MCP integration for adversarial review of designs, plans, and implementations.",
+    "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "cross-model-review",
-      "source": ".",
-      "description": "Codex MCP integration for adversarial review of designs, plans, and implementations.",
-      "version": "0.1.0",
-      "category": "development-workflow",
-      "tags": ["codex", "review", "superpowers", "autonomous"]
+      "source": "./",
+      "description": "Codex MCP integration for adversarial review of designs, plans, and implementations. Layers on Superpowers without modifying upstream skills."
     }
   ]
 }
