@@ -49,6 +49,63 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    - If exists: output "Section already present in CLAUDE.md. No changes made. If you want to refresh, manually delete the section and re-run setup."
    - If absent: append the additions verbatim. Output "Appended ~25 lines to ~/.claude/CLAUDE.md. The plugin is now active."
 
-6. **Suggest per-project notes (optional).** "If this project is a mixed-content repo (some content work, some code work — e.g., a website with a blog), add a per-project CLAUDE.md note. See README.md for an example."
+6. **Verify hookify and offer to install backup-nudge rules.**
 
-7. **Idempotent:** running this multiple times just re-checks status. Doesn't double-write the section.
+   Native Claude Code Stop hooks don't support transcript-pattern matchers (Stop events ignore the `matcher` field per the official hooks docs), so this plugin's Layer 3 backup nudges ride on the **hookify** plugin, which provides regex-driven Stop-event rules via per-project `.claude/hookify.*.local.md` files.
+
+   - Detect hookify by checking whether the `hookify:writing-rules` skill (or any `hookify:*` command) is available in the current session. If absent:
+     - Output: "hookify plugin not detected. The cross-model-review plugin's Layer 3 backup nudges (Stop-event reminders if a code-touching artifact was just saved and Codex review wasn't invoked) require hookify. Install via `/plugin install hookify@superpowers-marketplace` (or your equivalent marketplace) and re-run `/cross-model-setup`. Skipping hook installation — the plugin's skills and CLAUDE.md routing (Layers 1+2) still work."
+     - Skip to step 7.
+   - If hookify is present, ask: "Install hookify backup-nudge rules into `.claude/hookify.cross-model-plan-review.local.md` and `.claude/hookify.cross-model-impl-review.local.md` in this project? [Y/n]"
+   - If yes:
+     - Check whether either file already exists. If both exist: output "hookify rules already installed. No changes made. Delete them manually if you want to re-install." and skip to step 7.
+     - For each missing file, write the corresponding content below verbatim.
+     - Output: "Wrote N hookify rule file(s) to `.claude/`. Restart Claude Code for hookify to pick them up."
+
+   **File 1 — `.claude/hookify.cross-model-plan-review.local.md`:**
+
+   ```markdown
+   ---
+   name: cross-model-plan-review-nudge
+   enabled: true
+   event: stop
+   action: warn
+   pattern: (saved to docs/plans/|plan complete|design doc written)
+   ---
+
+   Reminder: a plan or design doc was recently saved to `docs/plans/`. If this is
+   a code-touching artifact and Codex review hasn't been invoked, consider
+   invoking `cross-model-review:codex-plan-review` now. If you skipped it
+   intentionally or it's not applicable (non-code plan), ignore this nudge.
+
+   Respect `state.skip_next_review` — if set in
+   `.claude/cross-model-review.session.local.md`, do not invoke (the plugin's
+   skill bodies handle the actual skip; this hook is just a reminder).
+   ```
+
+   **File 2 — `.claude/hookify.cross-model-impl-review.local.md`:**
+
+   ```markdown
+   ---
+   name: cross-model-impl-review-nudge
+   enabled: true
+   event: stop
+   action: warn
+   pattern: (all tasks complete|implementation complete|subagent-driven-development finished|ready to PR)
+   ---
+
+   Reminder: subagent-driven-development recently completed. Consider invoking
+   `cross-model-review:codex-impl-review` before opening a PR. If skipped
+   intentionally or not applicable, ignore.
+
+   Respect `state.skip_next_review` — if set in
+   `.claude/cross-model-review.session.local.md`, do not invoke.
+   ```
+
+   Notes for the writer:
+   - Use hookify's simple top-level `pattern:` form (documented for `event: stop`). The conditions/field-array form was considered but the hookify schema docs only list `command`, `file_path`, `new_text`, `old_text`, `content`, and `user_prompt` as explicit field names — there's no documented `transcript` field for stop events, so the simple `pattern:` shorthand is the supported route.
+   - Both rules use `action: warn` (the hookify default) so the nudge surfaces without blocking the agent stop. Skip-flag respect lives inside the message body — Claude reads it and consults `state.skip_next_review` before acting.
+
+7. **Suggest per-project notes (optional).** "If this project is a mixed-content repo (some content work, some code work — e.g., a website with a blog), add a per-project CLAUDE.md note. See README.md for an example."
+
+8. **Idempotent:** running this multiple times just re-checks status. Doesn't double-write the CLAUDE.md section, doesn't overwrite existing hookify rule files.

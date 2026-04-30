@@ -15,8 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `codex-brainstorm-partner` (Codex stands in for user during brainstorming).
 - Seven slash commands: `cross-model-autonomous-on`, `-autonomous-off`,
   `-skip`, `-review-now`, `-setup`, `-status`, `-reset`.
-- Two Stop-event hooks for backup nudging when lifecycle moments pass
-  without the corresponding skill firing.
+- Two Stop-event backup-nudge rules for lifecycle moments where the
+  corresponding skill failed to fire. Delivered as hookify rule files
+  (`.claude/hookify.cross-model-{plan,impl}-review.local.md`) installed
+  into the host project by `/cross-model-setup`. Native Claude Code Stop
+  hooks don't support transcript-pattern matchers, so hookify is the
+  Layer 3 carrier; the plugin works without it (Layers 1+2 still
+  operate), but backup nudging requires hookify to be installed.
 - Per-project durable session state at `.claude/cross-model-review.session.local.md`.
 - Per-chain decisions log at `.claude/cross-model-review/decisions/<artifact-basename>.md`.
 - Design / plan doc frontmatter as cross-machine resume bridge
