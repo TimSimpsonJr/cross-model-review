@@ -81,32 +81,62 @@ say so explicitly and ask Claude to provide what you need.
 
 Inlined into each review skill body. Source: design doc Sections 3.1, 5.1.
 
+**Critical ordering note:** The active-chain rule must be evaluated BEFORE any heuristic skip exit, otherwise within-chain reviews can be silently skipped (defeating drift protection). Compute the heuristic result first, then apply chain override, THEN consider exit.
+
 ```markdown
 ## Bootstrap (do this first, every invocation)
 
-1. Read `.claude/cross-model-review.session.local.md`. If absent, check for
-   frontmatter resume:
-   - Search `docs/plans/` on the current branch for design/plan docs whose
-     frontmatter contains `codex_thread_id`.
-     - Filter to candidates within last 24h or matching active branch's
+1. Detect storage mode:
+   - If working directory has `.git/` AND `.claude/` is writable: PERSISTED mode.
+   - If neither (read-only filesystem, projectless context): EPHEMERAL mode.
+
+2. Load state:
+   - PERSISTED: read `.claude/cross-model-review.session.local.md` if present.
+     If absent, check for frontmatter resume:
+     - Search `docs/plans/` on the current branch for design/plan docs whose
+       frontmatter contains `codex_thread_id`.
+     - Filter to candidates within last 24h OR matching the branch's
        most-recent commits.
-     - If exactly ONE candidate → resume that thread (try
-       `mcp__codex__codex-reply` with that threadId; on failure, fresh
-       thread + recovery handoff per Section 5.8 of design doc).
-     - If ZERO candidates → fresh thread; no resume.
-     - If MULTIPLE candidates → fresh thread + chat note about ambiguity.
-   - In all paths, write a fresh state file before continuing.
-2. If `state.skip_next_review == true`: clear flag, post chat note
-   ("Codex review skipped per /cross-model-skip"), exit skill.
-3. Duplicate-trigger guard: if `state.last_invocation_kind == this_kind`
+     - If exactly ONE candidate → attempt `mcp__codex__codex-reply` with that
+       threadId. On success: write fresh state file with that thread_id and
+       artifact path as `active_chain_artifact`. On failure (thread expired):
+       fall through to fresh-thread path with recovery handoff per design
+       doc Section 5.8.
+     - If ZERO candidates → write fresh state file with defaults; first MCP
+       call this project will create a new thread.
+     - If MULTIPLE candidates → write fresh state file with defaults; post
+       chat note: "Multiple design/plan docs in `docs/plans/` could match
+       this branch. Not auto-resuming. Use `/cross-model-review-now <kind>
+       <path>` to manually resume from a specific artifact."
+   - EPHEMERAL: read in-conversation state marker (look for the most recent
+     `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
+     Do NOT attempt to write a state file.
+
+3. If `state.skip_next_review == true`: clear flag (write state file in
+   PERSISTED mode; update in-context marker in EPHEMERAL mode), post chat
+   note ("Codex review skipped per /cross-model-skip"), exit skill.
+
+4. Duplicate-trigger guard: if `state.last_invocation_kind == this_kind`
    AND `(now - state.last_invocation) < 5 seconds` AND not manually
    invoked via `/cross-model-review-now` → exit early (silent dedupe).
-4. Run code-detection heuristic (Section 6 of design doc) on the artifact's
-   file list. If it says skip, post chat note explaining why and exit.
-5. Active-chain rule: if `state.active_chain_artifact` is set and current
-   trigger is for an artifact in that chain, ignore heuristic skip
-   (anti-flip-flop guard).
+
+5. Compute code-detection heuristic (Section 6 of design doc) on the
+   artifact's file list. Record the result (TRIGGER or SKIP) but do NOT
+   exit yet.
+
+6. Apply active-chain anti-flip-flop guard:
+   - If `state.active_chain_artifact` is set AND the current trigger's
+     artifact is in that chain (per Section 9.2 stem-matching rules) →
+     OVERRIDE heuristic to TRIGGER regardless of step 5's result.
+   - Otherwise, the heuristic result stands.
+
+7. Now act on the (possibly overridden) result:
+   - If TRIGGER → continue to MCP call (Block C).
+   - If SKIP → post chat note explaining why (heuristic outcome AND chain
+     status), exit skill.
 ```
+
+The persisted/ephemeral split in step 1 means this skill works correctly in projectless or read-only contexts — state lives in conversation context instead of disk.
 
 ### Block C: MCP invocation pattern
 
@@ -522,8 +552,13 @@ For this skill, `<this-mode>` is `design-review` or `plan-review` per the determ
 
 For this skill specifically:
 
-- On APPROVAL: write the appropriate `codex_*_status` and `codex_*_approved_hash` to the artifact's frontmatter. For design docs, also persist `codex_thread_id`. Compute hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped).
-- On REVISE: edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive) or log to decisions file (autonomous).
+- **On APPROVAL:**
+  - Write the appropriate approval-status and approval-hash to the artifact's frontmatter:
+    - `design-review`: `codex_design_review_status: approved` + `codex_design_review_approved_hash: <sha256>`.
+    - `plan-review`: `codex_plan_review_status: approved` + `codex_plan_review_approved_hash: <sha256>`.
+  - Compute hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped entirely).
+  - **Persist `codex_thread_id` to the artifact's frontmatter on EVERY approval** — applies to BOTH design docs AND plan docs. This is the load-bearing field for cross-machine frontmatter resume; both artifact types must carry it so a fresh install can resume from either. If the artifact already has `codex_thread_id` set (from a previous invocation), confirm it matches the current `state.codex_thread_id` and overwrite if different.
+- **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive) or log to decisions file (autonomous).
 
 ## Termination handoff
 
@@ -633,14 +668,30 @@ For this skill specifically:
 
 After approval:
 
-- Set `state.impl_review_approved_sha = <git HEAD sha>`.
-- Set `state.chain_status = "completed"` (assuming PR will be opened next).
-- Interactive mode: "Codex approved the implementation. Ready to open PR? [Y/n]"
-- Autonomous mode: open PR per Section 9.4 of design doc:
-  - Run `gh pr create` with description per template.
-  - Description includes: summary, all three approvals' status, decisions-pending file contents, any error notes, test plan from the original plan, "Generated with cross-model-review" footer.
-  - On success: post chat note with PR URL; fire local PushNotification if available.
-  - State transition: `chain_status: in_progress → completed`.
+- Set `state.impl_review_approved_sha = <git HEAD sha>`. (Approval is recorded; chain status NOT yet completed — PR opening is the closer.)
+- Leave `state.chain_status = "in_progress"` for now. Do NOT prematurely set it to `completed`.
+
+**Interactive mode:**
+- Post: "Codex approved the implementation. Ready to open PR? [Y/n]"
+- If user says yes → user opens PR via `gh pr create` themselves; Claude does not auto-set `chain_status` (manual chain closure is fine — `/cross-model-status` will still show approvals correctly).
+
+**Autonomous mode** — PR creation is the chain closer:
+
+1. Run `gh pr create` with description per template.
+2. Description includes: summary, all three approvals' status, decisions-pending file contents, any error notes, test plan from the original plan, "Generated with cross-model-review" footer.
+3. **Branch on result:**
+   - **PR creation succeeded** (gh exits 0, PR URL returned):
+     - Set `state.chain_status = "completed"`.
+     - Post chat note with PR URL.
+     - Fire local PushNotification if available.
+   - **PR creation failed** (non-zero exit, network error, gh not authenticated, etc.):
+     - Leave `state.chain_status = "in_progress"`.
+     - Capture the error.
+     - Treat as halt scenario: write halt note to per-chain decisions file with PR creation failure detail; transition `state.chain_status = "halted"`.
+     - Post chat note: *"Implementation approved by Codex but PR creation failed: <error>. State left as `halted`. Resolve the gh / network issue and run `gh pr create` manually, or invoke `/cross-model-review-now impl` to retry the autonomous closer."*
+     - Fire notification (autonomous halts notify per Section 9.6 of design doc).
+
+The contract: `chain_status: completed` means a PR exists for this work. If no PR exists (gh failed, user hasn't run it yet, etc.), the chain is NOT completed — even though approvals may be in place.
 
 ## Halt conditions specific to impl-review
 
@@ -1261,18 +1312,33 @@ git commit -m "feat: add /cross-model-reset command"
 
 ---
 
-### Task 16: Hooks (`hooks/hooks.json`)
+### Task 16: Hooks (`hooks/hooks.json` OR hookify fallback)
 
 **Files:**
-- Create: `hooks/hooks.json`
+- Create: `hooks/hooks.json` OR equivalent hookify rules (decision below)
 
-**Step 1: Define verification**
+**Step 1: Define verification — TWO required outcomes, not just JSON validity**
 
-Valid JSON. Two Stop-event hooks. Both prompt-injection-only (no state mutation). Both check `state.skip_next_review` before injecting (stay silent if set).
+Hooks aren't done when the JSON parses. They're done when they actually fire under the conditions they're supposed to fire under. Acceptance has two stages:
 
-**Step 2: Write the file**
+(A) **Schema validity:** `jq . hooks/hooks.json` parses cleanly.
+(B) **Behavioral validity:** the hooks actually fire in Claude Code when the matcher conditions are met, AND stay silent when `state.skip_next_review` is set.
 
-The exact format depends on Claude Code's native hooks schema. Below is the prompt-based pattern; if native hooks don't support transcript regex matching, this file may need to be replaced with hookify-format `.local.md` rules installed via `/cross-model-setup`. Implementation phase decides.
+If (B) cannot be confirmed using native Claude Code hooks (because the schema fields used here aren't actually supported), this task switches to the **hookify fallback path** (Step 2-alt). The task is NOT complete until either path produces hooks that demonstrably fire.
+
+**Step 2: Verify Claude Code's native hooks schema BEFORE writing the file**
+
+Before writing JSON, the implementer must:
+
+1. Read the current Claude Code hooks documentation (whichever is canonical at implementation time — `claude-code-guide` agent can fetch). Note the supported event names (Stop, PostToolUse, etc.) and the actual matcher schema fields.
+
+2. Confirm whether transcript-pattern matching at Stop is supported with field name(s) like `transcript_pattern`, `transcript`, `pattern`, or whatever the docs say. The fields used in the JSON below (`transcript_pattern`, `no_recent_invocation_of`) are speculative.
+
+3. **Decision branch:**
+   - **If native hooks schema supports the needed matchers** → write `hooks/hooks.json` per Step 2-native, adjusting field names to match documented schema.
+   - **If native hooks schema does NOT support transcript-based Stop matching with the needed fields** → skip Step 2-native; go to Step 2-alt (hookify fallback).
+
+**Step 2-native: Write the hooks file (only if Step 2 confirmed schema supports these matchers)**
 
 ```json
 {
@@ -1311,18 +1377,66 @@ The exact format depends on Claude Code's native hooks schema. Below is the prom
 }
 ```
 
-**Note for implementer:** Verify the exact `matcher` schema against the Claude Code hooks documentation at implementation time. The fields `transcript_pattern` and `no_recent_invocation_of` are speculative — if Claude Code uses different field names, adapt accordingly. If native hooks don't support these matchers, replace this file with hookify rules in `.claude/hookify.cross-model-*.local.md` shipped via `/cross-model-setup`.
+**Step 2-alt: Hookify fallback (only if Step 2 determined native hooks won't work)**
 
-**Step 3: Verify JSON parses**
+Skip writing `hooks/hooks.json`. Instead, modify `commands/cross-model-setup.md` so its setup flow installs hookify rule files in target projects. Specifically: `/cross-model-setup` writes two rule files into the host project's `.claude/` directory:
+
+- `.claude/hookify.cross-model-plan-review.local.md`
+- `.claude/hookify.cross-model-impl-review.local.md`
+
+Each contains the same content as the corresponding hook above, in hookify's frontmatter+prose format (matches the cortex pattern for hookify rules):
+
+```markdown
+---
+name: cross-model-plan-review-nudge
+enabled: true
+event: stop
+action: warn
+conditions:
+  - field: transcript
+    operator: regex_match
+    pattern: (saved to docs/plans/|plan complete|design doc written)
+---
+
+Reminder: a plan or design doc was recently saved to docs/plans/. If this is
+a code-touching artifact and Codex review hasn't been invoked, consider
+invoking cross-model-review:codex-plan-review now. If you skipped it
+intentionally or it's not applicable (non-code plan), ignore this nudge.
+
+Respect state.skip_next_review — if set, do not invoke (the plugin's skill
+bodies handle the actual skip; this hook is just a reminder).
+```
+
+(Hookify dependency check: `/cross-model-setup` should also verify the user has hookify installed; if not, prompt to install it via `/plugin install hookify@superpowers-marketplace` or whichever marketplace they have, OR proceed without hooks and warn that backup nudging is unavailable.)
+
+**Step 3: Verify schema validity (if went down native path)**
 
 Run: `jq . hooks/hooks.json`
 Expected: pretty-printed valid JSON, exit 0.
 
-**Step 4: Commit**
+**Step 4: Verify behavioral validity (REQUIRED for either path)**
+
+This task is NOT complete until at least one of the following is true:
+
+- **Native path:** the implementer manually confirms hooks fire in a sandbox Claude Code session (write a test design doc to `docs/plans/`, save, observe whether Claude receives the nudge prompt at the next Stop event). If hooks don't fire, debug or switch to hookify fallback path.
+- **Hookify path:** the implementer manually confirms hookify rules trigger in a sandbox session with hookify installed.
+
+If neither path produces firing hooks, the task remains incomplete — DO NOT mark complete and proceed. Surface the blocker; v0.1 might ship with hooks-disabled and rely on Layer 1 (skill descriptions) and Layer 2 (CLAUDE.md) only as a known limitation.
+
+**Step 5: Commit (whichever path was taken)**
 
 ```bash
+# Native path:
 git add hooks/hooks.json
-git commit -m "feat: add Stop-event backup nudge hooks"
+git commit -m "feat: add Stop-event backup nudge hooks (verified firing)"
+
+# Hookify path:
+git add commands/cross-model-setup.md
+git commit -m "feat: install hookify rules via setup (native hooks not viable)"
+
+# Hooks-disabled path:
+git commit -m "feat: ship v0.1 without backup hooks; documented as known limitation"
+# (and update README + CHANGELOG to note Layer 3 is absent in v0.1)
 ```
 
 ---
