@@ -241,6 +241,11 @@ After receiving Codex response, three branches:
      `codex_<kind>_status: approved` and `codex_<kind>_approved_hash:
      <sha256>` to the artifact's frontmatter. For impl-review, write
      `state.impl_review_approved_sha = <git HEAD sha>`.
+   - **Note for impl-review:** do NOT write `codex_impl_review_status` to
+     any artifact's frontmatter — that field does not exist in the schema.
+     The impl-review approval lives only in
+     `state.impl_review_approved_sha = <git HEAD sha>`. Per design doc §9.7,
+     only design-doc and plan-doc frontmatter carry approval status.
    - For brainstorm-partner: HANDOFF. Brainstorming converges naturally
      (this is upstream skill behavior; this skill just relays).
    - Post summary chat note ("Codex approved <kind> after N rounds.").
@@ -293,17 +298,18 @@ After approval:
      - Post chat note with PR URL.
      - Fire local PushNotification if available.
    - **PR creation failed** (non-zero exit, network error, gh not authenticated, etc.):
-     - Leave `state.chain_status = "in_progress"`.
      - Capture the error.
      - Treat as halt scenario: write halt note to per-chain decisions file with PR creation failure detail; transition `state.chain_status = "halted"`.
      - Post chat note: *"Implementation approved by Codex but PR creation failed: <error>. State left as `halted`. Resolve the gh / network issue and run `gh pr create` manually, or invoke `/cross-model-review-now impl` to retry the autonomous closer."*
      - Fire notification (autonomous halts notify per Section 9.6 of design doc).
 
+4. **Halt-path PRs are draft.** Whenever this skill opens a PR after a halt scenario (PR-creation failure that warrants retry-with-context, dirty-state halt with useful work to surface, or any other halt path that produces a PR), use `gh pr create --draft` and include an explicit `## ⚠️ AUTONOMOUS RUN HALTED` header at the top of the PR description with a one-paragraph explanation of why the run halted (gh-auth failure, dirty state, Codex unavailable, etc.). This visually distinguishes incomplete work from successful runs (per design doc Section 9.4).
+
 The contract: `chain_status: completed` means a PR exists for this work. If no PR exists (gh failed, user hasn't run it yet, etc.), the chain is NOT completed — even though approvals may be in place.
 
 ## Halt conditions specific to impl-review
 
-- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR if useful work was done; describe in halt note in decisions file).
+- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR per the **Halt-path PRs are draft** rule above if useful work was done; describe in halt note in decisions file).
 - subagent-driven-development task fails after retries: surface in chat (interactive); HALT in autonomous.
 - Branch-base undeterminable: skip with warning (interactive); HALT in autonomous.
 - Codex unavailable: HALT in autonomous mode (Section 9.6 of design doc — review is a critical gate).
