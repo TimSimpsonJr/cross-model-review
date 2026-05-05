@@ -1,4 +1,5 @@
 ---
+name: cross-model-autonomous-off
 description: Disable autonomous mode for the cross-model-review plugin. Return to interactive mode where user approves transitions between gates.
 allowed-tools: Read, Write, Edit, Bash
 ---

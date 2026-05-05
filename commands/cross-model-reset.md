@@ -1,4 +1,5 @@
 ---
+name: cross-model-reset
 description: Start a fresh cross-model-review chain in this project. Writes default-state file (overwrites existing). Does NOT touch design / plan doc content.
 allowed-tools: Read, Write, Edit, Bash
 ---

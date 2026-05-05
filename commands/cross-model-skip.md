@@ -1,4 +1,5 @@
 ---
+name: cross-model-skip
 description: Suppress the next single Codex review trigger of any kind. One-shot; clears automatically after one trigger fires-or-skips.
 allowed-tools: Read, Write, Edit, Bash
 ---

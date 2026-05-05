@@ -1,4 +1,5 @@
 ---
+name: cross-model-review-now
 description: Manually invoke a Codex review (design / plan / impl). Bypasses duplicate-trigger guard. Bypasses skip flag without consuming it. Requires unambiguous artifact target.
 allowed-tools: Read, Write, Edit, Bash
 argument-hint: design|plan|impl [optional path]

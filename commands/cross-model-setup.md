@@ -1,4 +1,5 @@
 ---
+name: cross-model-setup
 description: First-run setup for the cross-model-review plugin. Verifies Codex MCP, prints CLAUDE.md additions, optionally applies them. Idempotent.
 allowed-tools: Read, Write, Edit, Bash
 ---

@@ -1,4 +1,5 @@
 ---
+name: cross-model-status
 description: Plain-language report of cross-model-review state. Read-only; does NOT create the state file.
 allowed-tools: Read, Bash
 ---

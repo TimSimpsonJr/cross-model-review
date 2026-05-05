@@ -1,4 +1,5 @@
 ---
+name: cross-model-autonomous-on
 description: Enable autonomous mode for the cross-model-review plugin. Codex consensus replaces user approval at code-only gates.
 allowed-tools: Read, Write, Edit, Bash
 ---
