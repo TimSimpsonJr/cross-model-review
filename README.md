@@ -23,7 +23,7 @@ For overnight runs, autonomous mode lets Claude+Codex consensus replace user app
 /plugin install cross-model-review@cross-model-review
 ```
 
-Then run `/cross-model-setup` to verify Codex MCP is configured and apply the global CLAUDE.md additions.
+Then run `/cross-model-setup` to verify Codex MCP is configured, apply the global CLAUDE.md additions, and (optionally) install the hookify backup-nudge rules into the current project.
 
 ## Slash commands
 
@@ -44,6 +44,7 @@ Natural-language phrases also route to commands — see CLAUDE.md additions prin
 - Claude Code with plugin support
 - `superpowers` plugin installed (provides brainstorming, writing-plans, subagent-driven-development)
 - Codex MCP server configured (`mcp__codex__codex` and `mcp__codex__codex-reply` tools available)
+- *Optional:* `hookify` plugin — enables Layer 3 backup nudges at Stop events (reminds you to invoke a review if a code-touching artifact was just saved). The plugin works without it; skill bodies and CLAUDE.md routing (Layers 1+2) still carry the load.
 
 ## What gets sent to Codex
 
