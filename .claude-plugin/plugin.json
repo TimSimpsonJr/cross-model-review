@@ -7,9 +7,6 @@
     "email": "tim@timsimpsonjr.com"
   },
   "homepage": "https://github.com/TimSimpsonJr/cross-model-review",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/TimSimpsonJr/cross-model-review"
-  },
+  "repository": "https://github.com/TimSimpsonJr/cross-model-review",
   "license": "MIT"
 }
