@@ -19,7 +19,14 @@ Manually invoke a Codex review. Useful when auto-triggers misfire or when you wa
 
 1. Parse the `<kind>` argument. If missing or invalid, output: "Usage: /cross-model-review-now <design|plan|impl> [path]" and exit.
 
-2. Bootstrap state.
+2. Bootstrap state. If the state file is missing, fresh-create with defaults (writer contract, design §6.1) including:
+
+   ```yaml
+   filed_issues: []
+   context_limit_tokens: 200000
+   ```
+
+   alongside the other v0.1 defaults. If the state file exists, **preserve `filed_issues` and `context_limit_tokens` verbatim** on any subsequent write from this command.
 
 3. Resolve the artifact per design doc Section 7.1:
 

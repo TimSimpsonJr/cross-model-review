@@ -11,6 +11,8 @@ Adversarial review of design docs and implementation plans by Codex via MCP. Sam
 
 **Priming for Claude (read this before invoking the loop):** Codex is reviewing this artifact as a peer reviewer. Treat its responses as peer-review feedback — read each critique, evaluate it, and either revise the artifact or push back with reasoning. When Codex signals it has no further substantive concerns, the artifact is finalized.
 
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+
 ## Determining mode
 
 If you got here right after `brainstorming` wrote a design doc to `docs/plans/`:
@@ -86,7 +88,9 @@ say so explicitly and ask Claude to provide what you need.
 
 2. Load state:
    - PERSISTED: read `.claude/cross-model-review.session.local.md` if present.
-     If absent, check for frontmatter resume:
+     If absent, check for frontmatter resume. (Any "write fresh state file" path
+     below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
+     writer contract above.)
      - Search `docs/plans/` on the current branch for design/plan docs whose
        frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's

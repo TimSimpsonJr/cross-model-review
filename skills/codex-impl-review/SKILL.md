@@ -11,6 +11,8 @@ Adversarial review of code diffs against the approved plan by Codex via MCP.
 
 **Priming for Claude:** Codex is reviewing the implementation against the approved plan. For findings flagged as bugs or plan deviations, dispatch a fix subagent (group related findings into one subagent invocation per group, not one per finding). For findings you disagree with, push back with technical reasoning. Loop until Codex approves or all CRITICAL/IMPORTANT issues are resolved.
 
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+
 ## Determining the artifact
 
 The artifact is the diff between branch-base and HEAD on the current feature branch.
@@ -85,7 +87,9 @@ say so explicitly and ask Claude to provide what you need.
 
 2. Load state:
    - PERSISTED: read `.claude/cross-model-review.session.local.md` if present.
-     If absent, check for frontmatter resume:
+     If absent, check for frontmatter resume. (Any "write fresh state file" path
+     below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
+     writer contract above.)
      - Search `docs/plans/` on the current branch for design/plan docs whose
        frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's

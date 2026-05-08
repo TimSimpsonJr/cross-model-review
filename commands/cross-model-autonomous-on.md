@@ -12,7 +12,16 @@ Enable autonomous mode for the cross-model-review plugin in this project.
 
 1. Bootstrap state per the universal pattern: read `.claude/cross-model-review.session.local.md`; create with defaults if missing.
 
-2. Set `state.autonomous = true`. Update the state file on disk.
+   Fresh-create defaults (writer contract, design §6.1) include:
+
+   ```yaml
+   filed_issues: []
+   context_limit_tokens: 200000
+   ```
+
+   alongside the other v0.1 defaults (`autonomous`, `codex_thread_id`, `active_chain_artifact`, etc.).
+
+2. Set `state.autonomous = true`. Update the state file on disk. **Preserve `filed_issues` and `context_limit_tokens` verbatim** — only flip `autonomous`.
 
 3. If `state.codex_thread_id` is null (no Codex calls yet this project), don't initialize a thread — just record the autonomous flag.
 

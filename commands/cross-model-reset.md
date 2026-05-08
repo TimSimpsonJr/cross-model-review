@@ -12,9 +12,9 @@ Reset the cross-model-review chain to start fresh.
 
 1. Bootstrap state (read or create).
 
-2. Capture the previous `codex_thread_id` for the chat note (will be released).
+2. Capture the previous `codex_thread_id` for the chat note (will be released). If a prior state file exists, also capture its `context_limit_tokens` value so step 3 can preserve it across the reset.
 
-3. Overwrite the state file with defaults:
+3. Overwrite the state file with defaults. Reset **preserves `context_limit_tokens`** (user-tuned project config) and sets **`filed_issues: []`** (reset establishes a fresh new-regime chain — the field is set, not omitted, per the writer contract in design §6.1):
 
    ```yaml
    ---
@@ -27,6 +27,8 @@ Reset the cross-model-review chain to start fresh.
    last_invocation: null
    last_invocation_kind: null
    impl_review_approved_sha: null
+   filed_issues: []
+   context_limit_tokens: 200000
    session_start: <current ISO timestamp>
    ---
 
@@ -34,6 +36,8 @@ Reset the cross-model-review chain to start fresh.
 
    Auto-managed by the cross-model-review plugin. To reset, run `/cross-model-reset`.
    ```
+
+   The `200000` shown above is the fallback for a true fresh start. If a prior state file existed (captured in step 2), **preserve its `context_limit_tokens` value verbatim** — substitute it for `200000` in the block above. Only `filed_issues: []` is unconditional (reset establishes a fresh new-regime chain).
 
 4. **Do NOT touch design or plan doc frontmatter.** Their `codex_thread_id` and approval fields persist as fallback for *new* installs without state files; they won't be consulted while the post-reset state file exists.
 

@@ -11,6 +11,8 @@ Codex stands in for the user during a brainstorming flow. Routes Claude's brains
 
 **No priming for Claude.** Claude doesn't get any peer-review framing. The brainstorming flow proceeds normally; this skill operates between Claude asking a question and Claude reading "the user's response."
 
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+
 ## Universal Codex priming
 
 The text below is the universal priming string. Send it verbatim to Codex on the first MCP call per project (the fresh-thread path in the **Codex MCP call** section). It establishes Codex's role across all modes this project will use.
@@ -69,7 +71,7 @@ say so explicitly and ask Claude to provide what you need.
 
 Brainstorm-partner is opt-in and turn-based, so its bootstrap is much lighter than the review skills:
 
-1. Read `.claude/cross-model-review.session.local.md` (or use ephemeral fallback — look for the most recent `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
+1. Read `.claude/cross-model-review.session.local.md` (or use ephemeral fallback — look for the most recent `[cmr-state: ...]` line in transcript, or treat as fresh if absent). Any "write fresh state file" path below emits `filed_issues: []` and `context_limit_tokens: 200000` per the writer contract above.
    - If absent and at least one design/plan doc with `codex_thread_id` exists in `docs/plans/` on the current branch, apply the frontmatter-resume disambiguation rule:
      - Search `docs/plans/` on the current branch for design/plan docs whose frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's most-recent commits.
