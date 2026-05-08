@@ -51,26 +51,33 @@ Bind every state-file writer to the contract from design Section 6.1: fresh writ
 
 **Step 8: Update `skills/codex-brainstorm-partner/SKILL.md` Bootstrap step 1.** Same.
 
-**Step 9: Verify by spot-check.**
+**Step 9: Verify by static grep — non-destructive.**
+
+The active chain in this repo's state file must not be mutated during verification (this implementation runs in the live session). Verify by grepping the edited markdown directly to confirm each writer's fresh-state branch emits the new fields, and that update branches preserve them:
 
 ```bash
-# Remove any existing state file in this repo
-rm -f C:/Users/tim/OneDrive/Documents/Projects/cross-model-review/.claude/cross-model-review.session.local.md
+cd C:/Users/tim/OneDrive/Documents/Projects/cross-model-review
 
-# Trigger a fresh-state write via /cross-model-skip (lightest writer)
-# (manual: invoke /cross-model-skip in a Claude Code session in this repo)
-
-# Then verify
-grep -E "filed_issues:|context_limit_tokens:" C:/Users/tim/OneDrive/Documents/Projects/cross-model-review/.claude/cross-model-review.session.local.md
+# Each writer's source must mention both new fields somewhere in its body
+for f in commands/cross-model-reset.md \
+         commands/cross-model-autonomous-on.md \
+         commands/cross-model-autonomous-off.md \
+         commands/cross-model-skip.md \
+         commands/cross-model-review-now.md \
+         skills/codex-impl-review/SKILL.md \
+         skills/codex-plan-review/SKILL.md \
+         skills/codex-brainstorm-partner/SKILL.md; do
+  if grep -q "filed_issues" "$f" && grep -q "context_limit_tokens" "$f"; then
+    echo "OK:   $f"
+  else
+    echo "MISSING: $f" >&2
+  fi
+done
 ```
 
-Expected output:
-```
-filed_issues: []
-context_limit_tokens: 200000
-```
+Expected: every line is `OK: <path>`. Any `MISSING: …` line means the corresponding edit didn't land — re-open that file and add the field references.
 
-If absent → re-read the skill or command body and check the fresh-state branch.
+Do NOT delete the live state file or invoke any review skill / state-touching command as part of verification — those would mutate the active chain or set the skip flag and suppress a subsequent review.
 
 **Step 10: Commit.**
 
@@ -858,7 +865,7 @@ This is a one-shot to back-fill labels into existing owned repos. Not part of th
 
 - **No tests in the traditional sense.** This is markdown configuration, not runtime code. Verification is per-task (re-read the section, spot-check a state-file write, syntax-check bash). The end-to-end test is Codex's impl-review at Phase 15.
 
-- **Mandatory bash syntax check for every embedded snippet.** Every phase that embeds new bash inside a skill or command body (Phases 1, 7, 9, 11, 12, 13) MUST include this verification step before commit:
+- **Mandatory bash syntax check for every embedded snippet.** Every phase that embeds new bash inside a skill or command body — currently Phases 6, 7, 9, 10, 11, 12, 13 — MUST include this verification step before commit. (Phase 1 emits no new bash inside the writers; its writers' YAML defaults blocks aren't shell, so it's exempt.) The principle: any time you add a new fenced ` ```bash ` block to a skill or command body, syntax-check it. Run:
 
   1. Extract every fenced bash block from the file you just edited:
      \`\`\`bash
