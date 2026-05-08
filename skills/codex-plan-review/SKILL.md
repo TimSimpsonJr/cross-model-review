@@ -276,36 +276,62 @@ For this skill, `<this-mode>` is `design-review` or `plan-review` per the determ
 
 ## Response handling loop
 
-After receiving Codex response, three branches:
+### Tag-line parser
+
+Each finding from Codex begins with a tag line of the form:
+
+  `[severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]`
+
+Regex-extract the three values from each finding's first line. Defaults
+when the tag line is missing or malformed:
+- `severity` → `minor`
+- `scope` → `n-a` (this skill's gates have no code diff)
+- `cluster` → `solo-<sha8(finding-text)>` (no batching for that finding)
+
+These defaults make malformed tags safe rather than blocking. See design
+§4.1.
+
+### Routing (design §4)
+
+After receiving Codex response, first check session-level convergence;
+otherwise route each finding through the common entry check then the
+mode-specific path.
 
 1. **Convergence signal** ("looks good", "approved", "no further concerns",
-   similar plain-language signal):
-   - For design-review / plan-review / impl-review: APPROVAL. Write
-     `codex_<kind>_status: approved` and `codex_<kind>_approved_hash:
-     <sha256>` to the artifact's frontmatter. For impl-review, write
-     `state.impl_review_approved_sha = <git HEAD sha>`.
-   - For brainstorm-partner: HANDOFF. Brainstorming converges naturally
-     (this is upstream skill behavior; this skill just relays).
+   similar plain-language signal at the response level — not per-finding):
+   - APPROVAL. Write `codex_<kind>_status: approved` and
+     `codex_<kind>_approved_hash: <sha256>` to the artifact's frontmatter.
    - Post summary chat note ("Codex approved <kind> after N rounds.").
    - Exit loop.
 
-2. **User-bound question** (Codex tagged "this is a user decision: ..." OR
-   Claude classifies as UI/UX):
-   - In INTERACTIVE mode: post question in chat with optional
-     PushNotification fire; end Claude turn (turn-taking handles pause).
-   - In AUTONOMOUS mode (regime = pre-upgrade): append to per-chain
-     decisions file (`.claude/cross-model-review/decisions/<basename>.md`)
-     with stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
-     most defensible default; continue loop with default applied.
-     (Existing v0.1 behavior — unchanged.)
-   - In AUTONOMOUS mode (regime = new): file as `design-input-needed`
+Otherwise, for each finding (or cluster):
+
+2. **Common entry check — user-input flagged** (Codex tagged "this is a
+   user decision: ..." OR Claude classifies as UI/UX). **This check
+   outranks severity** — even a CRITICAL UI judgment call routes here, not
+   into substantive critique:
+   - INTERACTIVE: post question in chat with optional PushNotification
+     fire; end Claude turn (turn-taking handles pause).
+   - AUTONOMOUS + regime = new: batch-defer to `design-input-needed`
      issue. (Phase 6 documents the issue-filing helper; for now this
      branch just records the routing choice.)
+   - AUTONOMOUS + regime = pre-upgrade: append to per-chain decisions
+     file (`.claude/cross-model-review/decisions/<basename>.md`) with
+     stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
+     most defensible default; continue loop with default applied.
+     (Existing v0.1 behavior — unchanged.)
 
-3. **Substantive critique** (Codex flagged issues to address):
-   - Apply critique to artifact (edit design doc, edit plan, dispatch fix
-     subagent for impl-review per Section 5.4 of design doc).
-   - Loop back to "Codex MCP call" with revised content.
+3. **Substantive critique** (anything else Codex flagged — code-only
+   design flaws, plan deviations, missing edge cases, ambiguous specs):
+   - At `design-review` and `plan-review`, "substantive critique" means
+     **revise the artifact** (edit the design doc or plan doc directly)
+     and loop back to "Codex MCP call" with revised content. `scope` is
+     `n-a` here.
+
+Note: at design-review and plan-review gates, `autonomous-safe` issues
+are NOT produced. There is no code diff yet, so context-budget pressure
+does not exist. The only deferral mechanism at these gates is the
+user-input path above.
 
 After every loop iteration: update `state.last_invocation = now()`,
 `state.last_invocation_kind = <this-kind>`.
