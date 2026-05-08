@@ -371,6 +371,126 @@ After every loop iteration: update `state.last_invocation = now()`,
 are fixed (MINOR findings are routed per 3b — fixed in-session or
 deferred to issues — and do not block approval).
 
+## Issue filing (autonomous mode, new-regime chains)
+
+When a defer-path routes to issue-filing (autonomous mode + `regime = new`),
+follow these steps. The text below is identical between `codex-plan-review`
+and `codex-impl-review` per the "no shared `prompts/` directory" architecture
+(MANIFEST.md); changes must be applied to both copies.
+
+1. **Group by cluster.** Findings sharing a `cluster` tag (extracted by
+   the tag-line parser earlier in this skill) batch into one issue per
+   cluster. If a cluster mixes `autonomous-safe` and `design-input-needed`
+   defers, split into two issues — one per kind. If Codex omitted the
+   cluster tag, the parser's `solo-<sha8(...)>` default means each finding
+   becomes its own cluster (no batching).
+
+2. **Compose the title.** Format: `[<chain-stem>] <imperative description>`.
+   The stem comes from the existing stem-matching algorithm specified in
+   the original design doc `2026-04-29-cross-model-review-design.md` §9.2:
+   strip leading `YYYY-MM-DD-` date prefix, strip trailing
+   `-design`/`-plan`/`-impl` suffix, strip `.md` extension. For anchorless
+   impl-only chains (`state.active_chain_artifact = "branch:<branch-name>"`),
+   the stem is `branch:<branch-name>` verbatim.
+
+3. **Compose the body** (markdown, no frontmatter) per design §5.3.
+
+   **For `autonomous-safe`:**
+
+   ```markdown
+   ## Context
+   - **Chain:** `<active_chain_artifact path or branch:ref>`
+   - **Branch:** `<current branch>`
+   - **Filed during:** <gate-name> (commit <short-sha>)
+
+   ## Findings (cluster: <cluster-name>)
+   - **<SEVERITY> / <SCOPE> scope** — <finding 1 description>
+   - **<SEVERITY> / <SCOPE> scope** — <finding 2 description>
+   - ...
+
+   ## Suggested approach
+   <Codex's recommended fix as one paragraph or bullet list>
+
+   ## Acceptance criteria
+   - [ ] <criterion 1>
+   - [ ] <criterion 2>
+   - ...
+
+   ---
+   🤖 Filed by cross-model-review during <gate-name> on <YYYY-MM-DD>.
+   ```
+
+   **For `design-input-needed`,** replace `Suggested approach` and
+   `Acceptance criteria` with:
+
+   ```markdown
+   ## Decision needed
+   <the question Codex flagged>
+
+   ## Default applied (autonomous run)
+   <what Claude+Codex picked, with reasoning>
+
+   ## How to resolve
+   - Comment with your preferred answer to override
+   - Close as completed if the default is acceptable
+   - Close as superseded if circumstances changed before resolution
+   ```
+
+   The Context block, the closing footer line, and the bot-footer divider
+   are constant across both kinds.
+
+4. **Run the defer-path preconditions** before invoking `gh`. Three checks
+   in order — ownership (`git remote get-url origin` matches
+   `TimSimpsonJr/` or `TimSimpsonJr:`), `gh auth status`, `gh issue list
+   --limit 1` — all must pass. *(Phase 7 of the autonomous-issue-filing
+   plan documents the concrete invocations and the failure-routing table
+   from design §5.8. Until Phase 7 lands, this step is a placeholder; do
+   not attempt to file an issue without the precondition gate in place.)*
+
+5. **File via `gh issue create`, capturing the issue number.** `gh issue
+   create` writes the new issue's URL to stdout (e.g.,
+   `https://github.com/owner/repo/issues/123`). Capture the URL, extract
+   the trailing number, and append `{number, cluster, kind}` to
+   `state.filed_issues`. Use the snippet below as the invocation pattern;
+   the `<chain-stem>`, `<description>`, body content, and label value are
+   placeholders the skill substitutes per the steps above.
+
+```bash
+issue_url=$(gh issue create \
+  --title "[<chain-stem>] <description>" \
+  --body "$(cat <<'EOF'
+<body content>
+EOF
+)" \
+  --label "<autonomous-safe|design-input-needed>")
+
+issue_number="${issue_url##*/}"
+```
+
+   The `${var##*/}` parameter expansion strips everything up to and
+   including the last `/`, leaving just the issue number. Then append
+   `{number: $issue_number, cluster: "<cluster-name>", kind: "<label>"}`
+   to `state.filed_issues` and persist state (PERSISTED mode: write
+   `.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
+   the in-context `[cmr-state: ...]` marker).
+
+   If `gh issue create` fails (non-zero exit, OR exit zero but stdout is
+   empty / does not contain a recognizable issues URL), surface as a halt
+   per the precondition table — the issue was supposed to be filed but
+   isn't, so the chain cannot be considered safely deferred. *(Phase 7
+   documents the concrete halt routing per gate; until it lands, fall
+   back to interactive surfacing.)*
+
+6. **Bidirectional cross-link** (impl-review's PR-creation closer — NOT
+   done at filing time). When the PR is opened by `codex-impl-review`,
+   the skill runs `gh issue comment <number>` on each entry in
+   `state.filed_issues`: *"Originally filed during PR #N: <url>"*.
+   *(Phase 10 of the autonomous-issue-filing plan documents the PR-time
+   mechanics and the failure-tolerance rules. This skill at design-review
+   and plan-review gates does not perform the cross-link itself; it only
+   appends to `state.filed_issues` so the impl-review closer has the data
+   to work with.)*
+
 ## Termination handoff
 
 After approval:
