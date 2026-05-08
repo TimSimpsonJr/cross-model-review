@@ -107,6 +107,10 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
        - If absent → write the rule body verbatim.
        - If present → skip silently.
      - No "if all exist" early-exit; future rule additions land cleanly.
+     - **NOTE for maintainers:** the rule files listed below must stay
+       in sync with the `PLANNED` array in `commands/cross-model-status.md`
+       step 5. If you add a third hookify rule, update both files in
+       lockstep — otherwise the status report will be wrong-by-one.
      - Output: "Wrote N hookify rule file(s) to `.claude/`. Restart Claude Code for hookify to pick them up." (where N is the count of files actually written; if N is 0, output "All hookify rule files already present. No changes made.")
 
    **File 1 — `.claude/hookify.cross-model-plan-review.local.md`:**

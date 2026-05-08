@@ -60,7 +60,13 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
 
 5. **Per-rule hooks check.** Enumerate the planned rule list and count
    how many are installed. Mirrors the per-rule install pattern from
-   `/cross-model-setup` step 8 (design §9.4):
+   `/cross-model-setup` step 8 (design §9.4).
+
+   **NOTE for maintainers:** the PLANNED list below MUST stay in sync
+   with the rule files written by `/cross-model-setup` step 8. If you
+   add a third hookify rule (or any future rule type), update both
+   files in lockstep — otherwise this report will be wrong-by-one and
+   setup will quietly stop installing the new rule.
 
    ```bash
    PLANNED=(
