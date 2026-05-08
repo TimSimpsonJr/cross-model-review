@@ -390,6 +390,8 @@ if [ -z "$repos" ]; then
   exit 3
 fi
 
+failures=0
+
 while read -r repo; do
   for entry in "${LABELS[@]}"; do
     IFS='|' read -r name color desc <<< "$entry"
@@ -399,14 +401,20 @@ while read -r repo; do
       : # idempotent skip; no log
     else
       echo "FAIL: $repo/$name → $out" >&2
+      failures=$((failures + 1))
     fi
   done
 done <<< "$repos"
+
+if [ $failures -gt 0 ]; then
+  echo "ERROR: $failures label-create failure(s). See stderr above." >&2
+  exit 4
+fi
 ```
 
-The producer (`gh repo list`) runs separately so any failure there aborts with a clear error and a non-zero exit code. `set -o pipefail` plus `set -e` make any other unexpected failure abort early. The per-label `gh label create` is wrapped in an `if` so its non-zero exit codes don't trigger `set -e` — those are handled by the `already exists` filter.
+The producer (`gh repo list`) runs separately so any failure there aborts with a clear error and a non-zero exit code. `set -o pipefail` plus `set -e` make any other unexpected failure abort early. The per-label `gh label create` is wrapped in an `if` so its non-zero exit codes don't trigger `set -e` — those are handled by the `already exists` filter, and any real failure increments a counter that flips the script's exit code at the end.
 
-Exit codes: `0` on success (every label create either succeeded or was an idempotent skip), `2` for repo-list failure, `3` for empty repo list, non-zero otherwise. Callers can `&&` the script reliably now.
+Exit codes: `0` only when every label create either succeeded or was an idempotent skip. `2` for repo-list failure. `3` for empty repo list. `4` when at least one per-label failure was logged but the rest of the loop completed. Callers can `&&` the script reliably now.
 
 Real failures land on stderr with the repo and label names attached, so they survive even if you redirect stdout. "Already exists" is the only swallowed condition.
 
