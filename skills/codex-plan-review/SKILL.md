@@ -351,8 +351,8 @@ Otherwise, for each finding (or cluster):
    - INTERACTIVE: post question in chat with optional PushNotification
      fire; end Claude turn (turn-taking handles pause).
    - AUTONOMOUS + regime = new: batch-defer to `design-input-needed`
-     issue. (Phase 6 documents the issue-filing helper; for now this
-     branch just records the routing choice.)
+     issue. (See the **Issue filing** section below for the helper
+     mechanics.)
    - AUTONOMOUS + regime = pre-upgrade: append to per-chain decisions
      file (`.claude/cross-model-review/decisions/<basename>.md`) with
      stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
@@ -382,7 +382,7 @@ For this skill specifically:
     - `plan-review`: `codex_plan_review_status: approved` + `codex_plan_review_approved_hash: <sha256>`.
   - Compute hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped entirely).
   - **Persist `codex_thread_id` to the artifact's frontmatter on EVERY approval** — applies to BOTH design docs AND plan docs. This is the load-bearing field for cross-machine frontmatter resume; both artifact types must carry it so a fresh install can resume from either. If the artifact already has `codex_thread_id` set (from a previous invocation), confirm it matches the current `state.codex_thread_id` and overwrite if different.
-- **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive). In autonomous mode the drift note routes by regime: regime = pre-upgrade logs to the decisions file (existing v0.1 behavior — unchanged); regime = new defers to a `design-input-needed` issue (Phase 6 documents the helper; this branch just records the routing choice).
+- **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive). In autonomous mode the drift note routes by regime: regime = pre-upgrade logs to the decisions file (existing v0.1 behavior — unchanged); regime = new defers to a `design-input-needed` issue (see the **Issue filing** section below for the helper mechanics).
 
 ## Issue filing (autonomous mode, new-regime chains)
 
@@ -520,12 +520,12 @@ rm -f "$body_file"
 6. **Bidirectional cross-link** (impl-review's PR-creation closer — NOT
    done at filing time). When the PR is opened by `codex-impl-review`,
    the skill runs `gh issue comment <number>` on each entry in
-   `state.filed_issues`: *"Originally filed during PR #N: <url>"*.
-   *(Phase 10 of the autonomous-issue-filing plan documents the PR-time
-   mechanics and the failure-tolerance rules. This skill at design-review
+   `state.filed_issues`: *"Originally filed during PR #N: <url>"*. See
+   `codex-impl-review`'s **Termination handoff** section for the PR-time
+   mechanics and failure-tolerance rules. This skill at design-review
    and plan-review gates does not perform the cross-link itself; it only
-   appends to `state.filed_issues` so the impl-review closer has the data
-   to work with.)*
+   appends to `state.filed_issues` so the impl-review closer has the
+   data to work with.
 
 ### Defer-path preconditions
 

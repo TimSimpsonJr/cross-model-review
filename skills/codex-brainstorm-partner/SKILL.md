@@ -208,8 +208,10 @@ If Codex responds with "this is a UI/UX call I shouldn't make for Tim — surfac
 - Autonomous mode (regime = pre-upgrade): log to per-chain decisions file
   with defensible default; continue. (Existing v0.1 behavior — unchanged.)
 - Autonomous mode (regime = new): file as `design-input-needed` issue with
-  defensible default; continue. (Phase 6 documents the issue-filing helper;
-  for now this branch just records the routing choice.)
+  defensible default; continue. (See the **Issue filing** section in
+  `codex-plan-review` or `codex-impl-review` for the helper mechanics —
+  brainstorm-partner doesn't carry its own copy since it doesn't run a
+  review loop.)
 
 If Codex responds with "looks good, write the plan" or convergence signal:
 - Brainstorming converges naturally (this is `brainstorming` skill's flow; this skill just relays).

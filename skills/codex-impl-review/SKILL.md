@@ -424,8 +424,8 @@ Otherwise, for each finding (or cluster):
    - INTERACTIVE: post question in chat with optional PushNotification
      fire; end Claude turn (turn-taking handles pause).
    - AUTONOMOUS + regime = new: batch-defer to a `design-input-needed`
-     issue. (Phase 6 documents the issue-filing helper; for now this
-     branch just records the routing choice.)
+     issue. (See the **Issue filing** section below for the helper
+     mechanics.)
    - AUTONOMOUS + regime = pre-upgrade: append to per-chain decisions
      file (`.claude/cross-model-review/decisions/<basename>.md`) with
      stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
@@ -451,9 +451,8 @@ Otherwise, for each finding (or cluster):
      - `pct < 70%` AND `scope == small` → inline fix.
      - `pct < 85%` AND `scope ∈ {small, medium}` → subagent fix
        (offloads context from the working session).
-     - else → batch-defer to an `autonomous-safe` issue. (Phase 6
-       documents the issue-filing helper; for now this branch just records
-       the routing choice.)
+     - else → batch-defer to an `autonomous-safe` issue. (See the
+       **Issue filing** section below for the helper mechanics.)
 
    Specific thresholds: `threshold_low = 70%`, `threshold_high = 85%`.
 
@@ -611,9 +610,9 @@ rm -f "$body_file"
    done at filing time). When the PR is opened by `codex-impl-review`,
    the skill runs `gh issue comment <number>` on each entry in
    `state.filed_issues`: *"Originally filed during PR #N: <url>"*. See
-   the **Termination handoff** section below for the PR-time mechanics
-   and failure-tolerance rules. This skill at design-review and
-   plan-review gates does not perform the cross-link itself; it only
+   `codex-impl-review`'s **Termination handoff** section for the PR-time
+   mechanics and failure-tolerance rules. This skill at design-review
+   and plan-review gates does not perform the cross-link itself; it only
    appends to `state.filed_issues` so the impl-review closer has the
    data to work with.
 
