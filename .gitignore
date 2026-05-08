@@ -23,6 +23,9 @@ __pycache__/
 dist/
 build/
 
+# Claude Code IDE-local settings
+.claude/settings.local.json
+
 # Plugin runtime artifacts (created in target repos when this plugin runs)
 # Listed here for awareness — they will not appear in this plugin repo itself.
 # .claude/cross-model-review.session.local.md
