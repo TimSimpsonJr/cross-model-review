@@ -72,19 +72,10 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
 7. **Create plugin labels in current repo.** Skipped if step 3 marked
    labels-step as SKIP.
 
-   For each label in `[autonomous-safe, design-input-needed]`:
-   ```bash
-   gh label create autonomous-safe \
-     --color "0E8A16" \
-     --description "Code-only follow-up; eligible for autonomous pickup" 2>&1
-   gh label create design-input-needed \
-     --color "D93F0B" \
-     --description "Requires user judgment before work proceeds" 2>&1
-   ```
-
-   Filter stderr per the bulk-script pattern (Section 7.2 of design):
-   "already exists" → silent skip; any other error → surface with the
-   label name. Concrete pattern:
+   For each label in `[autonomous-safe, design-input-needed]`, run
+   `gh label create` with stderr filtering per the bulk-script pattern
+   (design §7.2): "already exists" → silent skip; any other error →
+   surface with the label name.
 
    ```bash
    for entry in "autonomous-safe|0E8A16|Code-only follow-up; eligible for autonomous pickup" \
