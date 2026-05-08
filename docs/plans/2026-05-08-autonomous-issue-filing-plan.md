@@ -51,31 +51,51 @@ Bind every state-file writer to the contract from design Section 6.1: fresh writ
 
 **Step 8: Update `skills/codex-brainstorm-partner/SKILL.md` Bootstrap step 1.** Same.
 
-**Step 9: Verify by static grep — non-destructive.**
+**Step 9: Verify by targeted regex — non-destructive, precise.**
 
-The active chain in this repo's state file must not be mutated during verification (this implementation runs in the live session). Verify by grepping the edited markdown directly to confirm each writer's fresh-state branch emits the new fields, and that update branches preserve them:
+The active chain's state file must not be mutated during verification (this implementation runs in the live session). Two separate checks, because commands and skills carry the protocol differently:
+
+**(a) Commands with YAML defaults blocks** must show the new fields *as YAML key:value lines*, not just as prose mentions. The regex anchors on start-of-line (possibly indented) plus the trailing literal that distinguishes YAML from prose: `filed_issues:` followed by `[` (the empty-list opener) and `context_limit_tokens:` followed by a digit (the integer default).
 
 ```bash
 cd C:/Users/tim/OneDrive/Documents/Projects/cross-model-review
 
-# Each writer's source must mention both new fields somewhere in its body
 for f in commands/cross-model-reset.md \
          commands/cross-model-autonomous-on.md \
          commands/cross-model-autonomous-off.md \
          commands/cross-model-skip.md \
-         commands/cross-model-review-now.md \
-         skills/codex-impl-review/SKILL.md \
-         skills/codex-plan-review/SKILL.md \
-         skills/codex-brainstorm-partner/SKILL.md; do
-  if grep -q "filed_issues" "$f" && grep -q "context_limit_tokens" "$f"; then
+         commands/cross-model-review-now.md; do
+  yaml_filed=$(grep -cE '^[[:space:]]*filed_issues:[[:space:]]*\[' "$f")
+  yaml_ctx=$(grep -cE '^[[:space:]]*context_limit_tokens:[[:space:]]*[0-9]+' "$f")
+  if [ "$yaml_filed" -ge 1 ] && [ "$yaml_ctx" -ge 1 ]; then
     echo "OK:   $f"
   else
-    echo "MISSING: $f" >&2
+    echo "MISSING (filed_issues_yaml=$yaml_filed ctx_yaml=$yaml_ctx): $f" >&2
   fi
 done
 ```
 
-Expected: every line is `OK: <path>`. Any `MISSING: …` line means the corresponding edit didn't land — re-open that file and add the field references.
+Expected: every line is `OK: <path>`. Prose mentions of the field names won't match these regexes — only YAML default lines do.
+
+**(b) Skills carry the writer protocol as referenced text, not as YAML directly.** Each review skill's preamble should reference the writer contract from design §6.1. Check via:
+
+```bash
+for f in skills/codex-impl-review/SKILL.md \
+         skills/codex-plan-review/SKILL.md \
+         skills/codex-brainstorm-partner/SKILL.md; do
+  if grep -qE "(writer (protocol|contract)|Section 6\.1|§6\.1)" "$f" \
+     && grep -q "filed_issues" "$f" \
+     && grep -q "context_limit_tokens" "$f"; then
+    echo "OK:   $f"
+  else
+    echo "MISSING (writer-contract reference + field names): $f" >&2
+  fi
+done
+```
+
+Expected: every line is `OK: <path>`. The skill body must reference the writer contract (by section number or by name) AND mention both field names — confirming the bootstrap describes the protocol rather than the field names appearing only as incidental mentions.
+
+Any `MISSING: …` line means the corresponding edit didn't land — re-open that file and check the relevant section.
 
 Do NOT delete the live state file or invoke any review skill / state-touching command as part of verification — those would mutate the active chain or set the skip flag and suppress a subsequent review.
 
@@ -867,9 +887,11 @@ This is a one-shot to back-fill labels into existing owned repos. Not part of th
 
 - **Mandatory bash syntax check for every embedded snippet.** Every phase that embeds new bash inside a skill or command body — currently Phases 6, 7, 9, 10, 11, 12, 13 — MUST include this verification step before commit. (Phase 1 emits no new bash inside the writers; its writers' YAML defaults blocks aren't shell, so it's exempt.) The principle: any time you add a new fenced ` ```bash ` block to a skill or command body, syntax-check it. Run:
 
-  1. Extract every fenced bash block from the file you just edited:
+  1. Extract every fenced bash block from the file you just edited. The awk pattern allows leading whitespace on both opening and closing fences so indented blocks (e.g., bash inside a numbered list item) are also captured:
      \`\`\`bash
-     awk '/^```bash$/,/^```$/' <edited-file> | grep -v '^```' > /tmp/extracted.sh
+     awk '/^[[:space:]]*```bash[[:space:]]*$/,/^[[:space:]]*```[[:space:]]*$/' <edited-file> \
+       | grep -vE '^[[:space:]]*```' \
+       > /tmp/extracted.sh
      \`\`\`
   2. Syntax-check:
      \`\`\`bash
