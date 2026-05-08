@@ -330,7 +330,7 @@ The framing in the MCP call is the primary prevention; this filter is
 defensive insurance against the framing being ignored.
 
 Apply this filter BEFORE the routing logic in the Routing sub-section
-above. A filtered finding does NOT count toward the fix-loop or
+below. A filtered finding does NOT count toward the fix-loop or
 budget-gate decisions.
 
 ### Routing (design §4 impl-review path)
