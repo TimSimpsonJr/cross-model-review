@@ -291,6 +291,73 @@ design doc); read each entry's `cluster` and `number` fields.
 
 If `state.filed_issues` is empty, omit the framing line entirely.
 
+## Context-budget probe (impl-review only)
+
+Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
+(estimated working-context usage as a percentage). Per design §6.
+
+### Probe procedure
+
+1. **Resolve project's transcript directory.** Get the repo toplevel via
+   `git rev-parse --show-toplevel`. Then transform that path into Claude
+   Code's encoded directory name by replacing each of `:`, `/`, and `\`
+   with `-`. Claude does this string transformation in-prompt — no shell
+   substitution required, so it works the same on Windows and Unix.
+   Example: a Windows toplevel `C:/Users/tim/OneDrive/Documents/Projects/cross-model-review`
+   becomes `C--Users-tim-OneDrive-Documents-Projects-cross-model-review`.
+   The result is the directory name under `~/.claude/projects/` that
+   holds this project's transcripts.
+
+   ```bash
+   toplevel=$(git rev-parse --show-toplevel)
+   # Encoded form: replace :, /, \ with - (Claude does this in-prompt; the
+   # variable is named `encoded` for the Glob step below).
+   ```
+
+2. **Find this project's newest transcript.** Use Glob with the literal
+   pattern `~/.claude/projects/<encoded>/*.jsonl` — substitute the value
+   from step 1 into the pattern string. Glob returns paths sorted by
+   modification time (newest first). Take the first result and assign
+   it to `transcript`. If Glob returns no matches, treat as `pct = 0`
+   (fresh session); proceed with default-to-fix routing.
+
+3. **Read size.**
+   ```bash
+   bytes=$(wc -c < "$transcript")
+   ```
+   `<` is shell input redirection; `"$transcript"` is the path captured
+   in step 2. Double-quoted variable handles paths with spaces. `wc -c`
+   over stdin emits just the byte count without the filename prefix —
+   exactly what we want for arithmetic.
+
+4. **Compute percentage.**
+   ```bash
+   pct=$(( bytes * 100 / 4 / context_limit_tokens ))
+   ```
+   `context_limit_tokens` comes from `state.context_limit_tokens` (default
+   200000; user sets 1000000 for the 1M Sonnet/Opus 1M-context tier).
+   `bytes / 4` is a rough char-to-token approximation. Order matters in
+   integer arithmetic: multiply by 100 BEFORE dividing to avoid zero
+   from rounding.
+
+### Sampling
+
+Once per fix-vs-defer decision is sufficient. Do NOT run on every tool
+call; the probe is a soft signal, not a real-time tracker. ~4 tool
+calls per check (one Bash for toplevel, one Glob, one Bash for `wc`,
+plus arithmetic).
+
+### What the probe approximates and what it misses
+
+The probe captures Claude's working-session context only — the relevant
+signal because the working session is what we're protecting from
+collapse. It does NOT account for:
+- Prompt-cache state
+- Subagent context (intentionally — subagents are off-context)
+- Future tool calls within the same fix
+
+Acceptable for v1; a more accurate probe is a v0.2 candidate.
+
 ## Response handling loop
 
 ### Tag-line parser
@@ -378,10 +445,8 @@ Otherwise, for each finding (or cluster):
      loop continues until those clusters are cleared.
 
    **3b. SEVERITY = minor (code-only — UI/UX minor was caught by the entry check above):**
-   - Run the context-budget probe to compute `pct` (estimated working-
-     context usage as a percentage). Phase 9 documents the probe procedure
-     as a new section before this routing block; for now this branch
-     references it as `pct = (...)`.
+   - Run the context-budget probe (Section above: **Context-budget probe**)
+     to compute `pct` (estimated working-context usage as a percentage).
    - Then route by `pct` and `scope`:
      - `pct < 70%` AND `scope == small` → inline fix.
      - `pct < 85%` AND `scope ∈ {small, medium}` → subagent fix
