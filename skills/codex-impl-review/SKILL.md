@@ -610,12 +610,12 @@ rm -f "$body_file"
 6. **Bidirectional cross-link** (impl-review's PR-creation closer — NOT
    done at filing time). When the PR is opened by `codex-impl-review`,
    the skill runs `gh issue comment <number>` on each entry in
-   `state.filed_issues`: *"Originally filed during PR #N: <url>"*.
-   *(Phase 10 of the autonomous-issue-filing plan documents the PR-time
-   mechanics and the failure-tolerance rules. This skill at design-review
-   and plan-review gates does not perform the cross-link itself; it only
-   appends to `state.filed_issues` so the impl-review closer has the data
-   to work with.)*
+   `state.filed_issues`: *"Originally filed during PR #N: <url>"*. See
+   the **Termination handoff** section below for the PR-time mechanics
+   and failure-tolerance rules. This skill at design-review and
+   plan-review gates does not perform the cross-link itself; it only
+   appends to `state.filed_issues` so the impl-review closer has the
+   data to work with.
 
 ### Defer-path preconditions
 
@@ -682,9 +682,66 @@ After approval:
    - regime = pre-upgrade: paste the per-chain decisions file contents
      verbatim under "Decisions deferred to your review." (Existing v0.1
      behavior — unchanged.)
-   - regime = new: render filed-issues block per design §5.6. (Phase 10
-     documents the cross-link mechanics; for now this branch just records
-     the routing choice.)
+   - **regime = new:** the PR description gains a "## Filed for follow-up"
+     section listing the issues filed during this chain.
+
+     **Construction:**
+     - Source: `state.filed_issues` (each entry has `{number, cluster, kind}`).
+     - For each entry, fetch the title via `gh issue view <number> --json title --jq .title`
+       (exact lookup, not fuzzy search). Label is read from the local
+       `kind` field — no extra fetch needed.
+     - Format each line as: `- #<number> (<kind>): <title>`.
+     - If `state.filed_issues` is empty, omit the section entirely (no
+       "(none)" placeholder).
+
+     Example output:
+
+     ```markdown
+     ## Filed for follow-up
+
+     - #123 (autonomous-safe): Extract query builder into separate module
+     - #124 (design-input-needed): Decide cache backend: in-memory vs Redis
+     ```
+
+     Concrete bash for the construction loop:
+
+     ```bash
+     if [ "${#filed_issues[@]}" -gt 0 ]; then
+       {
+         echo
+         echo "## Filed for follow-up"
+         echo
+         for entry in "${filed_issues[@]}"; do
+           # entry format: "number|cluster|kind"
+           IFS='|' read -r num cluster kind <<< "$entry"
+           title=$(gh issue view "$num" --json title --jq .title)
+           echo "- #${num} (${kind}): ${title}"
+         done
+       } >> pr_description.md
+     fi
+     ```
+
+     (The exact array-encoding of `state.filed_issues` is a yaml-parsing
+     concern; this snippet uses a `number|cluster|kind` pipe-separated
+     intermediate form. Skill body translates state YAML to that form
+     before the loop.)
+
+     **Bidirectional cross-link** (after `gh pr create` returns the PR URL):
+
+     For each entry in `state.filed_issues`:
+
+     ```bash
+     for entry in "${filed_issues[@]}"; do
+       IFS='|' read -r num cluster kind <<< "$entry"
+       gh issue comment "$num" --body "Originally filed during PR #${pr_number}: ${pr_url}" \
+         || echo "WARN: cross-link comment failed for issue #${num}; PR is the load-bearing artifact, continuing." >&2
+     done
+     ```
+
+     Best-effort: if `gh issue comment` fails for an individual issue, log
+     the failure to the chain's halt log (or chat note in interactive)
+     but do NOT halt the chain — the PR already exists and is the
+     load-bearing artifact.
 3. **Branch on result:**
    - **PR creation succeeded** (gh exits 0, PR URL returned):
      - Set `state.chain_status = "completed"`.
