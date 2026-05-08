@@ -70,6 +70,32 @@ Modes details:
    convergence with 'looks good' or 'approved' when no further substantive
    concerns.
 
+   When returning findings, start each finding with a parseable tag line of
+   this exact form:
+
+     [severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]
+
+   - severity: critical | important | minor — same meaning as before.
+   - scope:
+     * For impl-review (code diff): small | medium | large — context impact,
+       NOT change size. Use the diff as proxy for what's already loaded in
+       Claude's working context. A 300-line refactor inside files in the
+       diff is "small" (those files are hot). A 5-line tweak in a file
+       outside the diff is "medium" (Claude has to load it).
+     * For design-review and plan-review: n-a (no code diff exists at these
+       gates; the routing logic does not consume scope here).
+   - cluster: a short kebab-case name like "query-builder-extract" or
+     "auth-precedence". Group related findings under the same cluster name
+     so they can be batched into one fix subagent or one follow-up issue.
+     Use distinct cluster names for unrelated concerns. The cluster name
+     becomes the durable identifier for that group of findings; do not
+     rename it across rounds.
+
+   If a finding is genuinely a user-judgment call (UI/UX, brand-relevant
+   default, "could go either way"), still emit the tag line, then add the
+   existing 'this is a user decision: <question>' marker as the next line.
+   The user-decision marker takes routing precedence over severity.
+
 3. UI/UX surfacing: When you encounter a question that's genuinely a user
    judgment call (visual design, copy, interaction patterns,
    brand-relevant defaults), don't decide it yourself. Surface it: 'this
