@@ -748,7 +748,10 @@ After approval:
      - Fire local PushNotification if available.
    - **PR creation failed** (non-zero exit, network error, gh not authenticated, etc.):
      - Capture the error.
-     - Treat as halt scenario: write halt note to per-chain decisions file with PR creation failure detail; transition `state.chain_status = "halted"`.
+     - Treat as halt scenario:
+       - regime = new: write halt note to `.claude/cross-model-review/halts/<chain-stem>.md` with PR creation failure detail.
+       - regime = pre-upgrade: write halt note to per-chain decisions file (existing v0.1 behavior — unchanged).
+     - Transition `state.chain_status = "halted"`.
      - Post chat note: *"Implementation approved by Codex but PR creation failed: <error>. State left as `halted`. Resolve the gh / network issue and run `gh pr create` manually, or invoke `/cross-model-review-now impl` to retry the autonomous closer."*
      - Fire notification (autonomous halts notify per Section 9.6 of design doc).
 
@@ -758,7 +761,7 @@ The contract: `chain_status: completed` means a PR exists for this work. If no P
 
 ## Halt conditions specific to impl-review
 
-- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR per the **Halt-path PRs are draft** rule above if useful work was done; describe in halt note in decisions file).
+- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR per the **Halt-path PRs are draft** rule above if useful work was done; describe in halt note — written to `.claude/cross-model-review/halts/<chain-stem>.md` for regime = new chains, or to the per-chain decisions file for regime = pre-upgrade chains).
 - subagent-driven-development task fails after retries: surface in chat (interactive); HALT in autonomous.
 - Branch-base undeterminable: skip with warning (interactive); HALT in autonomous.
 - Codex unavailable: HALT in autonomous mode (Section 9.6 of design doc — review is a critical gate).

@@ -205,13 +205,13 @@ Codex's response IS the user's response, semantically. Claude reads it as conver
 
 If Codex responds with "this is a UI/UX call I shouldn't make for Tim — surface it: <question>":
 - Interactive mode: pause, post in chat with notification, wait for user.
-- Autonomous mode (regime = pre-upgrade): log to per-chain decisions file
-  with defensible default; continue. (Existing v0.1 behavior — unchanged.)
-- Autonomous mode (regime = new): file as `design-input-needed` issue with
-  defensible default; continue. (See the **Issue filing** section in
-  `codex-plan-review` or `codex-impl-review` for the helper mechanics —
-  brainstorm-partner doesn't carry its own copy since it doesn't run a
-  review loop.)
+- Autonomous mode: log to per-chain decisions file with defensible
+  default; continue. (Existing v0.1 behavior — unchanged. The design's
+  issue-filing extension was scoped to the three review gates only;
+  brainstorm-partner does not run a review loop and stays on v0.1
+  behavior regardless of regime. The bootstrap regime-detection at
+  step 2 above informs the writer contract but does not gate this
+  defer path.)
 
 If Codex responds with "looks good, write the plan" or convergence signal:
 - Brainstorming converges naturally (this is `brainstorming` skill's flow; this skill just relays).
