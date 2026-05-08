@@ -444,7 +444,11 @@ MARKER_BODY_EOF
 issue_url=$(gh issue create \
   --title "[<chain-stem>] <description>" \
   --body-file "$body_file" \
-  --label "<autonomous-safe|design-input-needed>")
+  --label "<autonomous-safe|design-input-needed>") || {
+  echo "ERROR: gh issue create failed (exit $?)" >&2
+  rm -f "$body_file"
+  exit 1
+}
 
 issue_number="${issue_url##*/}"
 [[ "$issue_number" =~ ^[0-9]+$ ]] || {
@@ -492,9 +496,11 @@ must pass; first failure routes to halt-or-chat per the failure table below.
 
 1. **Ownership.**
    ```bash
-   git remote get-url origin | grep -E "TimSimpsonJr/|TimSimpsonJr:" || exit 1
+   git remote get-url origin 2>/dev/null | grep -E "TimSimpsonJr/|TimSimpsonJr:" || exit 1
    ```
-   Non-zero → ownership precondition failed.
+   Non-zero → ownership precondition failed. The `2>/dev/null` silences
+   git's "No such remote 'origin'" stderr noise on repos lacking origin —
+   the precondition-failure chat note explains the situation more usefully.
 
 2. **gh auth.**
    ```bash
