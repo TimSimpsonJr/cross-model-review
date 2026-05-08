@@ -277,6 +277,20 @@ For this skill, `<this-mode>` is `impl-review`. Content includes:
 - The diff (full `git diff <branch-base>..HEAD` output).
 - Brief framing line: "Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming."
 
+**Re-flag prevention framing.** If `state.filed_issues` is non-empty,
+prepend to the artifact content (after the `[MODE: ...]` tag and any
+`[CHAIN-BOUNDARY]` marker, before the actual artifact body):
+
+> Already filed as issues in this chain (do not re-flag): cluster=<name>
+> issue #<number>, cluster=<name> issue #<number>, ...
+
+Cluster is the durable identifier — issue titles can be edited but
+cluster names are set at filing time and do not change. The list comes
+from `state.filed_issues` (Section 6.1 of the autonomous-issue-filing
+design doc); read each entry's `cluster` and `number` fields.
+
+If `state.filed_issues` is empty, omit the framing line entirely.
+
 ## Response handling loop
 
 ### Tag-line parser
@@ -294,6 +308,30 @@ when the tag line is missing or malformed:
 
 These defaults make malformed tags safe rather than blocking. See design
 §4.1.
+
+### Defensive re-flag filter
+
+After parsing each finding's tag line (severity, scope, cluster), check
+the cluster against `state.filed_issues`:
+
+```text
+# Pseudocode — Claude executes this conceptually rather than as a script.
+for filed in state.filed_issues:
+    if finding.cluster == filed.cluster:
+        # Codex re-surfaced an already-deferred concern despite the framing.
+        # Treat as no-op for this round.
+        log("Codex re-flagged already-filed cluster '<name>' (issue #<N>); ignored.")
+        skip this finding
+```
+
+Why it matters: cluster is the durable identifier set at filing time;
+mid-loop title edits or rewordings on the issue won't break this match.
+The framing in the MCP call is the primary prevention; this filter is
+defensive insurance against the framing being ignored.
+
+Apply this filter BEFORE the routing logic in the Routing sub-section
+above. A filtered finding does NOT count toward the fix-loop or
+budget-gate decisions.
 
 ### Routing (design §4 impl-review path)
 
