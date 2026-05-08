@@ -231,21 +231,27 @@ After PR creation, plugin runs `gh issue comment <num>` on each filed issue:
 
 This makes navigation work both ways — from PR you find the issues; from each issue you find the PR that prompted it.
 
-### 5.8 gh availability — lazy gating
+### 5.8 Defer-path preconditions — lazy gating + runtime ownership check
 
-`gh` is **not** checked at gate entry. A review run that fully resolves in-session (no defers) requires no `gh` and proceeds normally even on a non-GitHub remote.
+Three preconditions are checked **at the moment we are about to file an issue** (not at gate entry). A review run that fully resolves in-session — no defers — runs without any of these checks and works fine on a non-GitHub remote.
 
-`gh` is checked only at the moment we are about to file an issue. Two checks: `gh auth status` and `gh issue list --limit 1`. The latter catches "issues disabled on repo" and "no GitHub remote" simultaneously.
+The three checks, in order:
 
-**Behavior on gh failure (autonomous mode):**
+1. **Ownership.** `git remote get-url origin` matches `TimSimpsonJr/` or `TimSimpsonJr:`. This enforces the global "issues filed only in owned repos" policy at the actual write point, not just at setup time. Setup may have been skipped, labels may exist on a repo we don't own (someone else added them), or origin may have been changed since setup ran — the runtime check is the load-bearing one.
+2. **`gh auth status`** — exits zero.
+3. **`gh issue list --limit 1`** — exits zero. Catches "issues disabled on repo" and "no GitHub remote" simultaneously.
+
+If any of the three fails, the runtime treats it as a "cannot defer here" condition and routes per the failure table below.
+
+**Failure handling (autonomous mode), by gate:**
 
 | Gate | Failure handling |
 |---|---|
-| design-review / plan-review | Halt the chain. `state.chain_status = halted`. Post chat note explaining the halt. The artifact (design or plan doc) keeps any revisions Codex caused; Codex's thread is preserved for resumption via `/cross-model-review-now`. No PR is opened — no PR exists yet at these gates. |
+| design-review / plan-review | Halt the chain. `state.chain_status = halted`. Post chat note explaining which precondition failed (ownership, `gh auth`, or `gh issue list`). The artifact (design or plan doc) keeps any revisions Codex caused; Codex's thread is preserved for resumption via `/cross-model-review-now`. No PR is opened — no PR exists yet at these gates. |
 | impl-review (mid-loop) | Same: halt the chain, write halt note to a session-local halt log (`.claude/cross-model-review/halts/<chain-stem>.md` — new file, separate from the retired decisions file). Resume via `/cross-model-review-now impl`. |
 | impl-review (PR-creation closer) | Existing halt-path PR behavior unchanged: opens `gh pr create --draft` with explicit "AUTONOMOUS RUN HALTED" header, includes any unfiled defer payloads in a fallback section. |
 
-**Behavior on gh failure (interactive mode):** post chat note describing the failure and what was about to be filed; user resolves and re-invokes.
+**Failure handling (interactive mode):** post chat note describing which precondition failed and what was about to be filed; user resolves and re-invokes. For ownership failures specifically, the chat note explains the global policy — *"This repo is not owned by you, so the cross-model-review labeling convention doesn't apply. The plugin will not file issues here."*
 
 **Interactive mode defer choice:** when Codex flags an item for deferral in interactive mode, the skill asks: *"File as `<label>` issue or skip (Codex will not re-flag this round; no record kept)?"* The "keep in PR description" option from the original v1 sketch is removed — that path is what this design retires. If the user picks skip, the item is gone.
 
@@ -260,13 +266,15 @@ The original draft of this design proposed two new hooks (`PreCompact` circuit-b
 
 **Probe procedure (impl-review only — design/plan have no fix-vs-defer decision):**
 
-1. **Find transcript.** Use Glob with pattern `~/.claude/projects/*/*.jsonl`. Glob returns paths sorted by modification time (newest first per Glob's documented behavior). Take the first result. If Glob returns no matches, treat as `pct = 0` (fresh session); proceed with default-to-fix routing.
+1. **Resolve project's transcript directory.** Get the repo toplevel via `git rev-parse --show-toplevel` (Bash). Then transform that path into Claude Code's encoded directory name by replacing each of `:`, `/`, and `\` with `-`. Claude does this string transformation in its own head — no shell substitution required, so it works the same on Windows and Unix. The result is the directory name under `~/.claude/projects/` that holds this project's transcripts. Example: a Windows toplevel `C:/Users/tim/OneDrive/Documents/Projects/cross-model-review` becomes `C--Users-tim-OneDrive-Documents-Projects-cross-model-review`.
 
-2. **Read size.** `wc -c <path>` via Bash gives the byte count. (`wc` is available on Unix and on Windows under Git Bash / mingw64, both of which ship with Claude Code's environment.)
+2. **Find this project's newest transcript.** Glob `~/.claude/projects/<encoded>/*.jsonl`. Glob returns paths sorted by modification time (newest first). Take the first result. This guarantees we read THIS project's transcript even if other Claude Code sessions are running concurrently in different repos. If Glob returns no matches, treat as `pct = 0` (fresh session); proceed with default-to-fix routing.
 
-3. **Compute percentage.** `pct = (bytes / 4) * 100 / context_limit_tokens` where `context_limit_tokens` comes from `state.context_limit_tokens` (Section 6.1). Defaults to `200000` for 200k models; the user sets to `1000000` for the 1M Sonnet/Opus 1M-context tier. Bytes-divided-by-4 is a rough char-to-token approximation; good enough for the soft signal we need.
+3. **Read size.** `wc -c <path>` via Bash gives the byte count. (`wc` is available on Unix and on Windows under Git Bash / mingw64, both of which ship with Claude Code's environment.)
 
-The probe is roughly six tool calls per check. Sampling granularity is up to the skill body — once per fix-vs-defer decision is plenty; we are not trying to track context in real time.
+4. **Compute percentage.** `pct = (bytes / 4) * 100 / context_limit_tokens` where `context_limit_tokens` comes from `state.context_limit_tokens` (Section 6.1). Defaults to `200000` for 200k models; the user sets to `1000000` for the 1M Sonnet/Opus 1M-context tier. Bytes-divided-by-4 is a rough char-to-token approximation; good enough for the soft signal we need.
+
+The probe is roughly four tool calls per check (one Bash for toplevel, one Glob, one Bash for `wc`, plus arithmetic). Sampling granularity is up to the skill body — once per fix-vs-defer decision is plenty; we are not trying to track context in real time.
 
 **Thresholds and routing.** Specific values (e.g., "fix freely <70%", "small-only 70-85%", "defer >85%") live in the skill body and are tunable. The principle: lean toward fix; defer when budget signal indicates fixing would lose more than it gains.
 
@@ -482,14 +490,33 @@ Same refactor mirrors `/cross-model-status`: enumerate the planned rule list, ch
 
 ## 10. Edge cases and pre-upgrade chains
 
-**Pre-upgrade chain detection.** A chain that started before this enhancement landed has no `filed_issues` field in its state file. The skill detects this at impl-review entry: `if state.filed_issues is absent (not just empty) → pre-upgrade chain`. Pre-upgrade chains complete under v0.1 behavior:
+**Pre-upgrade chain detection — runs at every gate.** Issue-filing applies at design-review, plan-review, AND impl-review (a user-input deferral can fire at any of them in autonomous mode). So the v0.1-vs-new-behavior detection has to run wherever a deferral could happen, not just at impl-review entry.
+
+**Detection rule (applied in the bootstrap of every review skill before any deferral path runs):**
+
+```
+if state file does NOT exist:
+    → fresh chain. Write state with `filed_issues: []`. Use new behavior.
+
+if state file exists:
+    if `filed_issues` field is present (even if []):
+        → chain established under new regime. Use new behavior.
+    if `filed_issues` field is absent:
+        → chain established under v0.1, before the upgrade.
+          Use old behavior for the rest of this chain's lifetime.
+          Do NOT add the field — its absence is the durable marker.
+```
+
+The "fresh state file from frontmatter resume on a new machine" case (existing skills already support this — see `skills/codex-plan-review/SKILL.md:87-104`) is now correctly handled: a frontmatter-resumed chain creates a fresh state file with `filed_issues: []`, which puts it on new behavior. Codex's thread continues from the resumed point, but the chain's deferral mechanism is the new one. This is a slightly different outcome than "old chains die naturally," but it is the only consistent outcome — there is no signal in the design/plan doc itself that says "this was written under v0.1," so we err toward forward compatibility.
+
+**Pre-upgrade chain behavior (when detected):**
 
 - The decisions file at `.claude/cross-model-review/decisions/<basename>.md` keeps being written and read as before
 - PR description gets the verbatim-paste section as before
 - New issue-filing mechanism does NOT activate for that chain
-- No auto-migration: the original decisions file held a mix of user-decision items, heuristic ambiguity logs, and halt notes. Auto-converting all of them to `design-input-needed` issues would mislabel two of those three categories. Mirroring the universal-priming-update decision: old chains complete on old behavior; only new chains use new behavior.
+- No auto-migration: the original decisions file held a mix of user-decision items, heuristic ambiguity logs, and halt notes. Auto-converting all of them to `design-input-needed` issues would mislabel two of those three categories.
 
-New chains (created after the upgrade) get `state.filed_issues = []` written at chain establishment, which is the marker that flips the skill to new behavior. Once the marker is set, the decisions file is never written for that chain.
+The core property: **a chain commits to one regime at first establishment and stays there.** No mid-chain switching, no auto-migration.
 
 **Other edge cases:**
 
@@ -530,8 +557,8 @@ For the implementation plan (writing-plans phase), the changes touch:
 
 | Component | Change |
 |---|---|
-| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); parseable tag-line parser (Section 4.1); in-skill context-budget probe (Section 6); cluster-based re-flag prevention (Section 5.5); lazy `gh` gating (Section 5.8); pre-upgrade chain detection (Section 10) |
-| `skills/codex-plan-review/SKILL.md` | New routing rule applied at design-review and plan-review (entry check + apply-to-doc path); user-input defers file `design-input-needed` issues in autonomous mode; lazy `gh` gating (Section 5.8) |
+| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); parseable tag-line parser (Section 4.1); in-skill context-budget probe with project-encoded transcript path (Section 6); cluster-based re-flag prevention (Section 5.5); 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10) |
+| `skills/codex-plan-review/SKILL.md` | New routing rule applied at design-review and plan-review (entry check + apply-to-doc path); user-input defers file `design-input-needed` issues in autonomous mode; 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10) |
 | Universal priming text (in both review skills) | New parseable tag-line spec (Section 8) |
 | `commands/cross-model-setup.md` | Insert new step 3 (gh validation + ownership) and new step 7 (label creation in owned repos); refactor existing step 6 (now step 8) to per-rule install; renumber steps 3-7 to 4-8 (Sections 9.1, 9.2, 9.3) |
 | `commands/cross-model-status.md` | Per-rule hooks check; filed-issues block (Sections 6.2, 9.4) |
