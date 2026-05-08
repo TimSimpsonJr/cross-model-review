@@ -2,7 +2,7 @@
 
 Claude Code plugin that integrates Codex (via MCP) as an adversarial reviewer in the Superpowers workflow. Eliminates manual copy-paste between Claude and Codex during design / plan / implementation review steps. Supports overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval at code-only decision gates.
 
-**Status:** v0.1.0
+**Status:** v0.2.0
 
 ## What it does
 
@@ -24,6 +24,19 @@ For overnight runs, autonomous mode lets Claude+Codex consensus replace user app
 ```
 
 Then run `/cross-model-setup` to verify Codex MCP is configured, apply the global CLAUDE.md additions, and (optionally) install the hookify backup-nudge rules into the current project.
+
+## Upgrading from v0.1
+
+Existing v0.1 installs should re-run `/cross-model-setup` to pick up
+the new step 3 (gh validation + ownership check) and step 7 (label
+creation in owned repos). The setup is idempotent; re-running on an
+already-configured project only adds the missing pieces.
+
+Pre-upgrade chains (those started before v0.2 landed) continue on
+v0.1 behavior — the per-chain decisions file is still written and
+pasted into PR descriptions for those chains. New chains created
+after upgrade use the v0.2 issue-filing mechanism. No mid-chain
+switching; no auto-migration.
 
 ## Slash commands
 
