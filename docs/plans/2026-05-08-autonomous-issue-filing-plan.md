@@ -260,24 +260,40 @@ When a defer-path routes to issue-filing:
 4. **Run the defer-path preconditions** (Section 5.8 — three checks).
    See Phase 7 for the concrete Bash invocations.
 
-5. **File via `gh issue create`.** Capture the issue number from output.
-   Append `{number, cluster, kind}` to `state.filed_issues`.
+5. **File via `gh issue create`, capturing the issue number.** `gh issue
+   create` writes the new issue's URL to stdout (e.g.,
+   `https://github.com/owner/repo/issues/123`). Capture that URL, extract
+   the trailing number, append `{number, cluster, kind}` to
+   `state.filed_issues`.
 
 6. **Bidirectional cross-link** (impl-review's PR-creation closer; not
    immediate). When the PR is opened, this skill runs `gh issue comment <num>`
    on each filed issue: "Originally filed during PR #N: <url>".
 
-`gh issue create` invocation pattern:
+`gh issue create` invocation pattern with number capture:
 
 \`\`\`bash
-gh issue create \
+issue_url=$(gh issue create \
   --title "[<chain-stem>] <description>" \
   --body "$(cat <<'EOF'
 <body content>
 EOF
 )" \
-  --label "<autonomous-safe|design-input-needed>"
+  --label "<autonomous-safe|design-input-needed>")
+
+# Extract trailing number from the URL gh prints
+issue_number="${issue_url##*/}"
 \`\`\`
+
+The `${var##*/}` parameter expansion strips everything up to and
+including the last `/`, leaving just the issue number. Then append
+`{number: $issue_number, cluster: "<cluster-name>", kind: "<label>"}`
+to `state.filed_issues` and write state.
+
+If `gh issue create` fails (non-zero exit or empty stdout despite
+success), surface as a halt per the precondition table in Section 5.8 —
+the issue was supposed to be filed but isn't, so the chain cannot be
+considered safely deferred.
 ```
 
 **Step 2: Add the section verbatim to both skills.** The text is identical between `codex-plan-review` and `codex-impl-review`; both need their own copy (per the "no shared `prompts/` directory" architecture in MANIFEST.md).
@@ -432,24 +448,36 @@ working-context usage as a percentage). Per design §6.
    toplevel=$(git rev-parse --show-toplevel)
    \`\`\`
    Then transform `toplevel` by replacing each `:`, `/`, and `\` with `-`.
-   Claude does this in-prompt. Example: `C:/Users/tim/proj` →
-   `C--Users-tim-proj`. Result is the encoded directory name under
-   `~/.claude/projects/`.
+   Claude does this in-prompt — produces a string Claude assigns to a
+   conceptual `encoded` variable used in the next step. Example: a
+   Windows toplevel `C:/Users/tim/proj` becomes the encoded form
+   `C--Users-tim-proj`. (Encoding is mechanical; no shell needed for it.)
 
-2. **Find this project's newest transcript.**
-   Use Glob: `~/.claude/projects/<encoded>/*.jsonl` (Glob returns
-   newest-first by mtime). Take the first result. If no matches → treat
-   `pct = 0` (fresh session); proceed default-to-fix.
+2. **Find this project's newest transcript.** Use Glob with the literal
+   pattern `~/.claude/projects/<the encoded value>/*.jsonl` — Claude
+   substitutes the value from step 1 into the pattern string. Glob
+   returns newest-first by mtime. Take the first result and assign it
+   to `transcript`. If no matches → treat `pct = 0` (fresh session);
+   proceed default-to-fix.
 
 3. **Read size.**
    \`\`\`bash
-   wc -c < <transcript-path>
+   bytes=$(wc -c < "$transcript")
    \`\`\`
+   Note: `<` here is shell input redirection, and `"$transcript"` is the
+   path captured in step 2. The double-quoted variable handles paths with
+   spaces. `wc -c` over stdin emits just the byte count (no filename
+   prefix), which is what we want for the arithmetic in step 4.
 
 4. **Compute percentage.**
-   `pct = (bytes / 4) * 100 / state.context_limit_tokens`. Reads
-   `context_limit_tokens` from state (defaults to 200000; user sets
-   1000000 for 1M tier).
+   \`\`\`bash
+   pct=$(( bytes * 100 / 4 / context_limit_tokens ))
+   \`\`\`
+   `context_limit_tokens` comes from state (defaults to 200000; user
+   sets 1000000 for 1M tier). The `bytes / 4` is a rough char-to-token
+   approximation. The `* 100` and final `/ context_limit_tokens` give a
+   percentage. Order matters in integer arithmetic: multiplying by 100
+   before dividing avoids zero from rounding.
 
 ### Sampling
 
@@ -829,9 +857,34 @@ This is a one-shot to back-fill labels into existing owned repos. Not part of th
 ## Notes for the executor
 
 - **No tests in the traditional sense.** This is markdown configuration, not runtime code. Verification is per-task (re-read the section, spot-check a state-file write, syntax-check bash). The end-to-end test is Codex's impl-review at Phase 15.
+
+- **Mandatory bash syntax check for every embedded snippet.** Every phase that embeds new bash inside a skill or command body (Phases 1, 7, 9, 11, 12, 13) MUST include this verification step before commit:
+
+  1. Extract every fenced bash block from the file you just edited:
+     \`\`\`bash
+     awk '/^```bash$/,/^```$/' <edited-file> | grep -v '^```' > /tmp/extracted.sh
+     \`\`\`
+  2. Syntax-check:
+     \`\`\`bash
+     bash -n /tmp/extracted.sh
+     \`\`\`
+     Expected: silent, exit 0. Any error → fix the snippet before committing.
+  3. Optional shellcheck for additional rigor (warnings only — informational, not blocking):
+     \`\`\`bash
+     shellcheck /tmp/extracted.sh 2>/dev/null || true
+     \`\`\`
+  4. Clean up: `rm /tmp/extracted.sh`.
+
+  This catches malformed redirections, unquoted variables, missing
+  delimiters — exactly the class of bug that slipped through plan-review
+  round 1.
+
 - **No worktree assumed.** This plan is being executed in the cross-model-review repo's `main` branch directly per the user's autonomous-mode session. If the executor wants worktree isolation, switch to a feature branch before Phase 1.
+
 - **Frequent commits.** One commit per phase. Conventional Commits style. Reference the design section in the message.
+
 - **DRY duplication intentional.** The Issue filing helper (Phase 6) and Defer-path preconditions (Phase 7) are duplicated across `codex-plan-review` and `codex-impl-review` because the plugin's architecture is "no shared `prompts/` directory" (per MANIFEST.md). Verify identical with `diff` after each.
+
 - **Push to remote at the end of Phase 14.** Phase 15 (Codex impl-review) is the closer; in autonomous mode it opens the PR after approval.
 
 ---
