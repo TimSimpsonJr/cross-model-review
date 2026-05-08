@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings — CRLF would break bash parsing
+# under any POSIX shell (Git Bash on Windows tolerates CRLF in some contexts
+# but not for `bash -n` or `set -e` executions).
+*.sh text eol=lf
