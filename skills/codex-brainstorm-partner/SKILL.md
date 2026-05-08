@@ -116,12 +116,14 @@ Brainstorm-partner is opt-in and turn-based, so its bootstrap is much lighter th
      `regime = pre-upgrade`. Do NOT add the field — its absence is the
      durable marker.
 
-   `regime` is consulted later in defer paths (Section 5.8 of design doc)
-   and PR-construction paths (Section 5.6 of design doc) to choose
-   between issue-filing (regime=new) and decisions-file (regime=pre-upgrade).
-   Brainstorm-partner does not modify the active chain, but it can hit a
-   user-judgment defer (see Response handling below) that needs to route
-   by regime.
+   In the review skills (`codex-plan-review`, `codex-impl-review`),
+   `regime` is consulted later in defer paths and PR-construction paths
+   to choose between issue-filing (regime=new) and decisions-file
+   (regime=pre-upgrade). For `codex-brainstorm-partner` specifically,
+   the regime detection above only feeds the writer contract (fresh
+   writes emit `filed_issues: []`); the response-handling defer path
+   below stays on v0.1 behavior regardless of regime. The design's
+   issue-filing extension was scoped to the three review gates only.
 3. **Do NOT check `skip_next_review`.** Skip is review-only.
 4. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
 
