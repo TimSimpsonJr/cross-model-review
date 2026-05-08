@@ -95,7 +95,44 @@ done
 
 Expected: every line is `OK: <path>`. The skill body must reference the writer contract (by section number or by name) AND mention both field names — confirming the bootstrap describes the protocol rather than the field names appearing only as incidental mentions.
 
-Any `MISSING: …` line means the corresponding edit didn't land — re-open that file and check the relevant section.
+**(c) Preserve-branch check.** Fresh-write defaults are only half the contract; the update branches must preserve the fields on subsequent writes. Verify each command file's text describes the update behavior, not just the fresh-create defaults:
+
+```bash
+for f in commands/cross-model-reset.md \
+         commands/cross-model-autonomous-on.md \
+         commands/cross-model-autonomous-off.md \
+         commands/cross-model-skip.md \
+         commands/cross-model-review-now.md; do
+  if grep -qiE "(preserve|preserves|preserved)" "$f"; then
+    echo "OK preserve: $f"
+  else
+    echo "MISSING preserve language: $f" >&2
+  fi
+done
+```
+
+Expected: every line is `OK preserve: <path>`. Any `MISSING …` means the file's update-branch language didn't land — re-open and check the file describes BOTH fresh-create AND preserve-on-update branches.
+
+**(d) Manual checklist (mandatory final pass).** The grep checks above are coarse — they do not verify, for example, that `cross-model-reset.md` *specifically* preserves `context_limit_tokens` rather than `filed_issues`. After the grep loops pass, the executor walks the following checklist by reading each edited file:
+
+For every command file edited in Phase 1:
+- [ ] The fresh-create / "defaults if missing" branch includes `filed_issues: []` in the YAML.
+- [ ] The fresh-create branch includes `context_limit_tokens: 200000` in the YAML.
+- [ ] The update / existing-state branch explicitly says to preserve `filed_issues` verbatim.
+- [ ] The update branch explicitly says to preserve `context_limit_tokens` verbatim.
+
+For `commands/cross-model-reset.md` specifically:
+- [ ] Reset preserves the prior `context_limit_tokens` value (not reset to default).
+- [ ] Reset sets `filed_issues: []` (not omitted; reset establishes a new-regime chain).
+
+For each skill bootstrap edited:
+- [ ] Bootstrap references the writer contract from design §6.1 by section number or by name.
+- [ ] Bootstrap describes the fresh-create branch (emit both new fields).
+- [ ] Bootstrap describes the update branch (preserve both fields).
+
+Only after ALL checklist items are checked does Phase 1 commit.
+
+Any unchecked item means an edit didn't land — re-open that file and add the missing description.
 
 Do NOT delete the live state file or invoke any review skill / state-touching command as part of verification — those would mutate the active chain or set the skip flag and suppress a subsequent review.
 
@@ -713,7 +750,11 @@ done
 total=${#PLANNED[@]}
 ```
 
-**Step 4: Verify by re-reading the status output template.** All three formats (PERSISTED, EPHEMERAL, NONE) should still be coherent. EPHEMERAL doesn't have filed_issues persistence so it shows decisions-only; NONE shows nothing.
+**Step 4: Verify by re-reading the status output template.** All three formats (PERSISTED, EPHEMERAL, NONE) should still be coherent.
+
+**Note on EPHEMERAL:** state in EPHEMERAL mode is persisted in the in-conversation `[cmr-state: ...]` marker (see `skills/codex-plan-review/SKILL.md:105` and `skills/codex-impl-review/SKILL.md:104` for the read paths, and the corresponding `:171` / `:169` for the write paths). That marker can carry `filed_issues` just like a persisted state file. So `/cross-model-status` in EPHEMERAL mode shows the filed-issues block whenever `filed_issues` is present in the marker, and the pending-decisions block only when the chain is in pre-upgrade regime. The regime check from Phase 3 is the discriminator — not the storage mode. Update the EPHEMERAL output template accordingly: same regime-dependent branching as PERSISTED.
+
+NONE shows nothing related to filed-issues or decisions (no chain established).
 
 **Step 5: Commit.**
 
