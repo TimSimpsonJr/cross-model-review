@@ -279,53 +279,96 @@ For this skill, `<this-mode>` is `impl-review`. Content includes:
 
 ## Response handling loop
 
-After receiving Codex response, three branches:
+### Tag-line parser
+
+Each finding from Codex begins with a tag line of the form:
+
+  `[severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]`
+
+Regex-extract the three values from each finding's first line. Defaults
+when the tag line is missing or malformed:
+- `severity` → `minor`
+- `scope` → `medium` (impl-review default per design §4.1; the budget
+  gate below consumes scope)
+- `cluster` → `solo-<sha8(finding-text)>` (no batching for that finding)
+
+These defaults make malformed tags safe rather than blocking. See design
+§4.1.
+
+### Routing (design §4 impl-review path)
+
+After receiving Codex response, first check session-level convergence;
+otherwise route each finding through the common entry check, then the
+impl-review-specific severity + budget routing.
 
 1. **Convergence signal** ("looks good", "approved", "no further concerns",
-   similar plain-language signal):
-   - For design-review / plan-review / impl-review: APPROVAL. Write
-     `codex_<kind>_status: approved` and `codex_<kind>_approved_hash:
-     <sha256>` to the artifact's frontmatter. For impl-review, write
-     `state.impl_review_approved_sha = <git HEAD sha>`.
-   - **Note for impl-review:** do NOT write `codex_impl_review_status` to
-     any artifact's frontmatter — that field does not exist in the schema.
-     The impl-review approval lives only in
-     `state.impl_review_approved_sha = <git HEAD sha>`. Per design doc §9.7,
-     only design-doc and plan-doc frontmatter carry approval status.
-   - For brainstorm-partner: HANDOFF. Brainstorming converges naturally
-     (this is upstream skill behavior; this skill just relays).
-   - Post summary chat note ("Codex approved <kind> after N rounds.").
+   similar plain-language signal at the response level — not per-finding):
+   - APPROVAL. Write `state.impl_review_approved_sha = <git HEAD sha>`.
+   - Do NOT write `codex_impl_review_status` to any frontmatter — that
+     field does not exist in the schema (design §9.7 — only design-doc and
+     plan-doc frontmatter carry approval status; impl-review has no
+     artifact frontmatter).
+   - Post summary chat note ("Codex approved impl-review after N rounds.").
    - Exit loop.
 
-2. **User-bound question** (Codex tagged "this is a user decision: ..." OR
-   Claude classifies as UI/UX):
-   - In INTERACTIVE mode: post question in chat with optional
-     PushNotification fire; end Claude turn (turn-taking handles pause).
-   - In AUTONOMOUS mode (regime = pre-upgrade): append to per-chain
-     decisions file (`.claude/cross-model-review/decisions/<basename>.md`)
-     with stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
-     most defensible default; continue loop with default applied.
-     (Existing v0.1 behavior — unchanged.)
-   - In AUTONOMOUS mode (regime = new): file as `design-input-needed`
+Otherwise, for each finding (or cluster):
+
+2. **Common entry check — user-input flagged** (Codex tagged "this is a
+   user decision: ..." OR Claude classifies as UI/UX):
+   - INTERACTIVE: post question in chat with optional PushNotification
+     fire; end Claude turn (turn-taking handles pause).
+   - AUTONOMOUS + regime = new: batch-defer to a `design-input-needed`
      issue. (Phase 6 documents the issue-filing helper; for now this
      branch just records the routing choice.)
+   - AUTONOMOUS + regime = pre-upgrade: append to per-chain decisions
+     file (`.claude/cross-model-review/decisions/<basename>.md`) with
+     stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
+     most defensible default; continue loop with default applied.
+     (Existing v0.1 behavior — unchanged.)
 
-3. **Substantive critique** (Codex flagged issues to address):
-   - Apply critique to artifact (edit design doc, edit plan, dispatch fix
-     subagent for impl-review per Section 5.4 of design doc).
-   - Loop back to "Codex MCP call" with revised content.
+   **This check outranks severity** — even a CRITICAL UI judgment call
+   routes here, not into the fix-loop or budget gate below.
+
+3. **Impl-review-specific routing** (post entry check):
+
+   **3a. SEVERITY = critical or important:**
+   - Existing fix-loop. Group related findings by `cluster`; dispatch ONE
+     fix subagent per cluster (existing outcome-based behavior — a
+     subagent can address one finding or several in one pass). Codex won't
+     approve until all critical/important findings are resolved, so the
+     loop continues until those clusters are cleared.
+
+   **3b. SEVERITY = minor (code-only):**
+   - Run the context-budget probe to compute `pct` (estimated working-
+     context usage as a percentage). Phase 9 documents the probe procedure
+     as a new section before this routing block; for now this branch
+     references it as `pct = (...)`.
+   - Then route by `pct` and `scope`:
+     - `pct < 70%` AND `scope == small` → inline fix.
+     - `pct < 85%` AND `scope ∈ {small, medium}` → subagent fix
+       (offloads context from the working session).
+     - else → batch-defer to an `autonomous-safe` issue. (Phase 6
+       documents the issue-filing helper; for now this branch just records
+       the routing choice.)
+
+   Specific thresholds: `threshold_low = 70%`, `threshold_high = 85%`.
+
+   Throughout: prefer subagent dispatch over inline edit for any
+   non-trivial fix. Subagents offload context from the working session,
+   which is what the budget gate is protecting.
+
+**Note:** at impl-review, `autonomous-safe` issues ARE produced when the
+context-budget signal indicates that fixing would lose more than it gains.
+This is the inverse of the design/plan gates, where no autonomous-safe
+issues are filed because no code diff exists. Here, the diff exists and
+fixing it competes for working-session context.
 
 After every loop iteration: update `state.last_invocation = now()`,
 `state.last_invocation_kind = "impl-review"`.
 
-For this skill specifically:
-
-- **Findings handled outcome-based, not finding-based.** Group related findings (same module, same edge case, same design gap). For each group, dispatch ONE fix subagent with all related findings together. A subagent can address one finding or several in one pass.
-- **Severity routing:**
-  - CRITICAL: dispatch fix subagent immediately, loop.
-  - IMPORTANT: dispatch fix subagent immediately, loop.
-  - MINOR: log in PR description as "noted, deferred." Don't necessarily fix.
-- **Approval condition:** Codex approves OR all CRITICAL/IMPORTANT are fixed.
+**Approval condition:** Codex approves OR all CRITICAL/IMPORTANT findings
+are fixed (MINOR findings are routed per 3b — fixed in-session or
+deferred to issues — and do not block approval).
 
 ## Termination handoff
 
