@@ -136,6 +136,22 @@ say so explicitly and ask Claude to provide what you need.
      `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
      Do NOT attempt to write a state file.
 
+2.5. **Pre-upgrade chain detection.** After loading state in step 2, classify
+   the chain regime:
+   - State file was just created fresh in step 2 (or in EPHEMERAL mode,
+     marker just initialized) → set `regime = new`. The fresh-state write
+     from step 2 already emitted `filed_issues: []` per the writer
+     contract (preamble, design §6.1).
+   - State file existed AND has the `filed_issues` field (even if []) →
+     set `regime = new`.
+   - State file existed AND has NO `filed_issues` field → set
+     `regime = pre-upgrade`. Do NOT add the field — its absence is the
+     durable marker.
+
+   `regime` is consulted later in defer paths (Section 5.8 of design doc)
+   and PR-construction paths (Section 5.6 of design doc) to choose
+   between issue-filing (regime=new) and decisions-file (regime=pre-upgrade).
+
 3. If `state.skip_next_review == true`: clear flag (write state file in
    PERSISTED mode; update in-context marker in EPHEMERAL mode), post chat
    note ("Codex review skipped per /cross-model-skip"), exit skill.
@@ -277,10 +293,14 @@ After receiving Codex response, three branches:
    Claude classifies as UI/UX):
    - In INTERACTIVE mode: post question in chat with optional
      PushNotification fire; end Claude turn (turn-taking handles pause).
-   - In AUTONOMOUS mode: append to per-chain decisions file
-     (`.claude/cross-model-review/decisions/<basename>.md`) with stable
-     handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick most
-     defensible default; continue loop with default applied.
+   - In AUTONOMOUS mode (regime = pre-upgrade): append to per-chain
+     decisions file (`.claude/cross-model-review/decisions/<basename>.md`)
+     with stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
+     most defensible default; continue loop with default applied.
+     (Existing v0.1 behavior — unchanged.)
+   - In AUTONOMOUS mode (regime = new): file as `design-input-needed`
+     issue. (Phase 6 documents the issue-filing helper; for now this
+     branch just records the routing choice.)
 
 3. **Substantive critique** (Codex flagged issues to address):
    - Apply critique to artifact (edit design doc, edit plan, dispatch fix
@@ -298,7 +318,7 @@ For this skill specifically:
     - `plan-review`: `codex_plan_review_status: approved` + `codex_plan_review_approved_hash: <sha256>`.
   - Compute hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped entirely).
   - **Persist `codex_thread_id` to the artifact's frontmatter on EVERY approval** — applies to BOTH design docs AND plan docs. This is the load-bearing field for cross-machine frontmatter resume; both artifact types must carry it so a fresh install can resume from either. If the artifact already has `codex_thread_id` set (from a previous invocation), confirm it matches the current `state.codex_thread_id` and overwrite if different.
-- **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive) or log to decisions file (autonomous).
+- **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive). In autonomous mode the drift note routes by regime: regime = pre-upgrade logs to the decisions file (existing v0.1 behavior — unchanged); regime = new defers to a `design-input-needed` issue (Phase 6 documents the helper; this branch just records the routing choice).
 
 ## Termination handoff
 

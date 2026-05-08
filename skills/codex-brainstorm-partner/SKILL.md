@@ -104,8 +104,26 @@ Brainstorm-partner is opt-in and turn-based, so its bootstrap is much lighter th
      - If exactly ONE candidate → attempt `mcp__codex__codex-reply` with that threadId. On success: write fresh state file with that thread_id and artifact path as `active_chain_artifact`. On failure (thread expired): fall through to fresh-thread path with recovery handoff per design doc Section 5.8.
      - If ZERO candidates → write fresh state file with defaults; first MCP call this project will create a new thread.
      - If MULTIPLE candidates → write fresh state file with defaults; post chat note: "Multiple design/plan docs in `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact."
-2. **Do NOT check `skip_next_review`.** Skip is review-only.
-3. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
+2. **Pre-upgrade chain detection.** After loading state in step 1, classify
+   the chain regime:
+   - State file was just created fresh in step 1 (or in EPHEMERAL mode,
+     marker just initialized) → set `regime = new`. The fresh-state write
+     from step 1 already emitted `filed_issues: []` per the writer
+     contract (preamble, design §6.1).
+   - State file existed AND has the `filed_issues` field (even if []) →
+     set `regime = new`.
+   - State file existed AND has NO `filed_issues` field → set
+     `regime = pre-upgrade`. Do NOT add the field — its absence is the
+     durable marker.
+
+   `regime` is consulted later in defer paths (Section 5.8 of design doc)
+   and PR-construction paths (Section 5.6 of design doc) to choose
+   between issue-filing (regime=new) and decisions-file (regime=pre-upgrade).
+   Brainstorm-partner does not modify the active chain, but it can hit a
+   user-judgment defer (see Response handling below) that needs to route
+   by regime.
+3. **Do NOT check `skip_next_review`.** Skip is review-only.
+4. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
 
 (No `state.paused` check — that field is not part of the v0.1 schema; brainstorm-partner is gated only by user opt-in.)
 
@@ -187,7 +205,11 @@ Codex's response IS the user's response, semantically. Claude reads it as conver
 
 If Codex responds with "this is a UI/UX call I shouldn't make for Tim — surface it: <question>":
 - Interactive mode: pause, post in chat with notification, wait for user.
-- Autonomous mode: log to per-chain decisions file with defensible default; continue.
+- Autonomous mode (regime = pre-upgrade): log to per-chain decisions file
+  with defensible default; continue. (Existing v0.1 behavior — unchanged.)
+- Autonomous mode (regime = new): file as `design-input-needed` issue with
+  defensible default; continue. (Phase 6 documents the issue-filing helper;
+  for now this branch just records the routing choice.)
 
 If Codex responds with "looks good, write the plan" or convergence signal:
 - Brainstorming converges naturally (this is `brainstorming` skill's flow; this skill just relays).
