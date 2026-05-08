@@ -405,20 +405,21 @@ and `codex-impl-review` per the "no shared `prompts/` directory" architecture
 
    ## Findings (cluster: <cluster-name>)
    - **<SEVERITY> / <SCOPE> scope** — <finding 1 description>
-   - **<SEVERITY> / <SCOPE> scope** — <finding 2 description>
-   - ...
+   - (repeat per finding in the cluster)
 
    ## Suggested approach
    <Codex's recommended fix as one paragraph or bullet list>
 
    ## Acceptance criteria
-   - [ ] <criterion 1>
-   - [ ] <criterion 2>
-   - ...
+   - [ ] <criterion 1, derived from Codex's Suggested approach>
+   - (repeat per criterion)
 
    ---
    🤖 Filed by cross-model-review during <gate-name> on <YYYY-MM-DD>.
    ```
+
+   `<gate-name>` is one of `design-review`, `plan-review`, or
+   `impl-review` — match the skill name exactly (lowercase kebab-case).
 
    **For `design-input-needed`,** replace `Suggested approach` and
    `Acceptance criteria` with:
