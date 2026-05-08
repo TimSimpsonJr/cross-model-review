@@ -415,47 +415,65 @@ and `codex-impl-review` per the "no shared `prompts/` directory" architecture
    The Context block, the closing footer line, and the bot-footer divider
    are constant across both kinds.
 
-4. **Run the defer-path preconditions** before invoking `gh`. Three checks
-   in order — ownership (`git remote get-url origin` matches
-   `TimSimpsonJr/` or `TimSimpsonJr:`), `gh auth status`, `gh issue list
-   --limit 1` — all must pass. *(Phase 7 of the autonomous-issue-filing
-   plan documents the concrete invocations and the failure-routing table
-   from design §5.8. Until Phase 7 lands, this step is a placeholder; do
-   not attempt to file an issue without the precondition gate in place.)*
+4. **Run the defer-path preconditions** before invoking `gh`. See the
+   **Defer-path preconditions** sub-section below for the three concrete
+   bash invocations (ownership, `gh auth status`, `gh issue list --limit
+   1`) and the failure-routing table per gate / mode (design §5.8). All
+   three checks must pass before reaching step 5.
 
 5. **File via `gh issue create`, capturing the issue number.** `gh issue
    create` writes the new issue's URL to stdout (e.g.,
-   `https://github.com/owner/repo/issues/123`). Capture the URL, extract
-   the trailing number, and append `{number, cluster, kind}` to
-   `state.filed_issues`. Use the snippet below as the invocation pattern;
-   the `<chain-stem>`, `<description>`, body content, and label value are
+   `https://github.com/owner/repo/issues/123`). The snippet below
+   composes the body into a temp file (avoids a heredoc-EOF collision if
+   Codex's findings or recommendations contain a literal `EOF` line —
+   e.g., when reviewing shell scripts that themselves use heredocs),
+   files via `--body-file`, then validates the extracted issue number
+   with a regex before appending to `state.filed_issues`. The
+   `<chain-stem>`, `<description>`, body content, and label value are
    placeholders the skill substitutes per the steps above.
 
 ```bash
+# Compose the body content into a temp file (avoids heredoc-EOF
+# collision if the body contains a literal "EOF" line). The inner
+# heredoc uses a unique sentinel that won't collide with English prose.
+body_file=$(mktemp -t cmr-issue-body.XXXXXX)
+cat > "$body_file" <<'MARKER_BODY_EOF'
+<body content goes here — verbatim from the templates above>
+MARKER_BODY_EOF
+
 issue_url=$(gh issue create \
   --title "[<chain-stem>] <description>" \
-  --body "$(cat <<'EOF'
-<body content>
-EOF
-)" \
+  --body-file "$body_file" \
   --label "<autonomous-safe|design-input-needed>")
 
 issue_number="${issue_url##*/}"
+[[ "$issue_number" =~ ^[0-9]+$ ]] || {
+  echo "ERROR: could not extract issue number from gh output: $issue_url" >&2
+  rm -f "$body_file"
+  exit 1
+}
+rm -f "$body_file"
 ```
 
    The `${var##*/}` parameter expansion strips everything up to and
-   including the last `/`, leaving just the issue number. Then append
+   including the last `/`, leaving just the issue number. The
+   `[[ ... =~ ^[0-9]+$ ]]` regex test then asserts the result is purely
+   digits — guards against trailing-slash URLs, malformed gh output,
+   etc. On extraction failure, treat as a `gh-issue-list`-precondition
+   failure with the extraction failure as the chat-note detail (route
+   per the failure-handling table in **Defer-path preconditions** below).
+
+   On success, append
    `{number: $issue_number, cluster: "<cluster-name>", kind: "<label>"}`
    to `state.filed_issues` and persist state (PERSISTED mode: write
    `.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
    the in-context `[cmr-state: ...]` marker).
 
-   If `gh issue create` fails (non-zero exit, OR exit zero but stdout is
-   empty / does not contain a recognizable issues URL), surface as a halt
-   per the precondition table — the issue was supposed to be filed but
-   isn't, so the chain cannot be considered safely deferred. *(Phase 7
-   documents the concrete halt routing per gate; until it lands, fall
-   back to interactive surfacing.)*
+   If `gh issue create` itself fails (non-zero exit, OR exit zero but
+   stdout is empty / does not contain a recognizable issues URL), surface
+   as a halt per the **Defer-path preconditions** failure table — the
+   issue was supposed to be filed but isn't, so the chain cannot be
+   considered safely deferred.
 
 6. **Bidirectional cross-link** (impl-review's PR-creation closer — NOT
    done at filing time). When the PR is opened by `codex-impl-review`,
@@ -466,6 +484,48 @@ issue_number="${issue_url##*/}"
    and plan-review gates does not perform the cross-link itself; it only
    appends to `state.filed_issues` so the impl-review closer has the data
    to work with.)*
+
+### Defer-path preconditions
+
+Before any `gh issue create`, run these three checks IN ORDER. All three
+must pass; first failure routes to halt-or-chat per the failure table below.
+
+1. **Ownership.**
+   ```bash
+   git remote get-url origin | grep -E "TimSimpsonJr/|TimSimpsonJr:" || exit 1
+   ```
+   Non-zero → ownership precondition failed.
+
+2. **gh auth.**
+   ```bash
+   gh auth status >/dev/null 2>&1
+   ```
+   Non-zero → auth precondition failed.
+
+3. **gh issue list.**
+   ```bash
+   gh issue list --limit 1 >/dev/null 2>&1
+   ```
+   Non-zero → repo-issues precondition failed (issues disabled, no
+   GitHub remote, etc.).
+
+On any precondition failure:
+
+- **AUTONOMOUS + design-review or plan-review gate** → set
+  `state.chain_status = halted`; post chat note naming which precondition
+  failed (`ownership`, `gh-auth`, or `gh-issue-list`).
+- **AUTONOMOUS + impl-review mid-loop** → halt; write halt note to
+  `.claude/cross-model-review/halts/<chain-stem>.md` (new file, separate
+  from the retired decisions file).
+- **AUTONOMOUS + impl-review PR-creation closer** → existing draft-PR
+  halt path (Section 9.6 of the original design doc
+  `2026-04-29-cross-model-review-design.md`); include unfiled defer
+  payloads in the fallback section of the PR description.
+- **INTERACTIVE** → post chat note describing failure; user resolves
+  and re-invokes. For ownership specifically, include this policy
+  explanation: *"This repo is not owned by you, so the
+  cross-model-review labeling convention doesn't apply. The plugin
+  will not file issues here."*
 
 ## Termination handoff
 
