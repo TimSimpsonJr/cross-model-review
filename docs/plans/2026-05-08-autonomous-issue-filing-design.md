@@ -298,7 +298,22 @@ Title is fetched on-demand via `gh issue view <num> --json title` at PR-creation
 
 **Lifecycle of `filed_issues`:** scoped to the active chain. When `state.active_chain_artifact` changes (per Section 9.2 of the original design), `filed_issues` resets. Old chains' issues stay in GitHub and were already listed in the merged PR; no reason to carry them forward.
 
-**Lifecycle of `context_limit_tokens`:** project-level, not per-chain. Defaults to `200000` if absent (200k context tier). Set to `1000000` for the 1M tier. The user edits this once per project; it is not auto-detected because the harness does not expose model-tier context size to skills.
+**Lifecycle of `context_limit_tokens`:** project-level, not per-chain. Defaults to `200000` if absent (200k context tier). Set to `1000000` for the 1M tier. The user edits this once per project; it is not auto-detected because the harness does not expose model-tier context size to skills. **Reset preserves this field** — `/cross-model-reset` rewrites the rest of state to defaults but leaves `context_limit_tokens` alone (and `filed_issues` is reset to `[]`, not removed, since reset establishes a fresh new-regime chain).
+
+**State-file write protocol — applies to every writer.** The detection rule in Section 10 keys on `filed_issues` field presence, so every component that creates or rewrites the state file must emit it. The full set of writers (verified against the current repo):
+
+| Writer | Behavior |
+|---|---|
+| `skills/codex-impl-review/SKILL.md` | First write of a fresh state file: emit `filed_issues: []` and `context_limit_tokens: 200000`. Subsequent writes preserve both fields verbatim. |
+| `skills/codex-plan-review/SKILL.md` | Same. |
+| `skills/codex-brainstorm-partner/SKILL.md` | Same. |
+| `commands/cross-model-autonomous-on.md` | If creating a fresh state file: emit `filed_issues: []` and `context_limit_tokens: 200000`. If updating an existing one: preserve both verbatim, only flip `autonomous: true`. |
+| `commands/cross-model-autonomous-off.md` | Same — preserve both verbatim, only flip `autonomous: false`. |
+| `commands/cross-model-skip.md` | Same — preserve both verbatim, only set `skip_next_review: true`. |
+| `commands/cross-model-reset.md` | Reset to defaults, but: **preserve `context_limit_tokens`** (user-tuned config); **set `filed_issues: []`** (not absent — reset establishes a fresh new-regime chain). |
+| `commands/cross-model-review-now.md` | Same as the review skills — emit on first write, preserve on update. |
+
+The implication for pre-upgrade detection: a state file written by ANY of the above under v0.1 lacks `filed_issues`. Once any of them runs under the new version on that file, the absence is the durable marker — Section 10's detection treats the chain as pre-upgrade and **does not add the field**, even on update writes from those commands.
 
 The decisions file mechanism (`.claude/cross-model-review/decisions/<basename>.md`) is **retired** for new chains created after this enhancement lands. Pre-upgrade chains keep using the old behavior — see Section 10 for the detection rule.
 
@@ -358,31 +373,42 @@ One-shot script to run as part of this work. Captures stderr so we can distingui
 ```bash
 #!/usr/bin/env bash
 # Requires bash. On Windows, run under Git Bash / mingw64.
-set -u
+set -euo pipefail
 
 LABELS=(
   "autonomous-safe|0E8A16|Code-only follow-up; eligible for autonomous pickup"
   "design-input-needed|D93F0B|Requires user judgment before work proceeds"
 )
 
-gh repo list TimSimpsonJr --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner' \
-  | while read -r repo; do
-      for entry in "${LABELS[@]}"; do
-        IFS='|' read -r name color desc <<< "$entry"
-        out=$(gh label create "$name" --repo "$repo" --color "$color" --description "$desc" 2>&1)
-        rc=$?
-        if [ $rc -eq 0 ]; then
-          echo "OK:   $repo/$name"
-        elif echo "$out" | grep -qi "already exists"; then
-          : # idempotent skip; no log
-        else
-          echo "FAIL: $repo/$name → $out" >&2
-        fi
-      done
-    done
+# Fetch the repo list separately so a producer failure aborts the script
+# rather than silently producing zero-iteration "success."
+repos=$(gh repo list TimSimpsonJr --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner') \
+  || { echo "ERROR: gh repo list failed. Check gh auth + network." >&2; exit 2; }
+
+if [ -z "$repos" ]; then
+  echo "ERROR: gh repo list returned no repos. Aborting before iteration." >&2
+  exit 3
+fi
+
+while read -r repo; do
+  for entry in "${LABELS[@]}"; do
+    IFS='|' read -r name color desc <<< "$entry"
+    if out=$(gh label create "$name" --repo "$repo" --color "$color" --description "$desc" 2>&1); then
+      echo "OK:   $repo/$name"
+    elif echo "$out" | grep -qi "already exists"; then
+      : # idempotent skip; no log
+    else
+      echo "FAIL: $repo/$name → $out" >&2
+    fi
+  done
+done <<< "$repos"
 ```
 
-Real failures land on stderr with the repo name attached, so they survive even if you redirect stdout. "Already exists" is the only swallowed condition.
+The producer (`gh repo list`) runs separately so any failure there aborts with a clear error and a non-zero exit code. `set -o pipefail` plus `set -e` make any other unexpected failure abort early. The per-label `gh label create` is wrapped in an `if` so its non-zero exit codes don't trigger `set -e` — those are handled by the `already exists` filter.
+
+Exit codes: `0` on success (every label create either succeeded or was an idempotent skip), `2` for repo-list failure, `3` for empty repo list, non-zero otherwise. Callers can `&&` the script reliably now.
+
+Real failures land on stderr with the repo and label names attached, so they survive even if you redirect stdout. "Already exists" is the only swallowed condition.
 
 The script requires `bash`. On Windows, run it under Git Bash / mingw64, both of which ship with the Claude Code environment.
 
@@ -557,13 +583,19 @@ For the implementation plan (writing-plans phase), the changes touch:
 
 | Component | Change |
 |---|---|
-| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); parseable tag-line parser (Section 4.1); in-skill context-budget probe with project-encoded transcript path (Section 6); cluster-based re-flag prevention (Section 5.5); 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10) |
-| `skills/codex-plan-review/SKILL.md` | New routing rule applied at design-review and plan-review (entry check + apply-to-doc path); user-input defers file `design-input-needed` issues in autonomous mode; 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10) |
+| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); parseable tag-line parser (Section 4.1); in-skill context-budget probe with project-encoded transcript path (Section 6); cluster-based re-flag prevention (Section 5.5); 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10); state-file writer contract (Section 6.1) |
+| `skills/codex-plan-review/SKILL.md` | New routing rule applied at design-review and plan-review (entry check + apply-to-doc path); user-input defers file `design-input-needed` issues in autonomous mode; 3-precondition defer-path check including runtime ownership (Section 5.8); pre-upgrade chain detection at bootstrap (Section 10); state-file writer contract (Section 6.1) |
+| `skills/codex-brainstorm-partner/SKILL.md` | State-file writer contract — emit `filed_issues: []` + `context_limit_tokens: 200000` on first write; preserve both on update (Section 6.1) |
 | Universal priming text (in both review skills) | New parseable tag-line spec (Section 8) |
 | `commands/cross-model-setup.md` | Insert new step 3 (gh validation + ownership) and new step 7 (label creation in owned repos); refactor existing step 6 (now step 8) to per-rule install; renumber steps 3-7 to 4-8 (Sections 9.1, 9.2, 9.3) |
-| `commands/cross-model-status.md` | Per-rule hooks check; filed-issues block (Sections 6.2, 9.4) |
+| `commands/cross-model-status.md` | Per-rule hooks check; filed-issues block (Sections 6.2, 9.4). Read-only — does not write state. |
+| `commands/cross-model-autonomous-on.md` | State-file writer contract per Section 6.1 — emit new fields on first write, preserve on update |
+| `commands/cross-model-autonomous-off.md` | Same |
+| `commands/cross-model-skip.md` | Same |
+| `commands/cross-model-reset.md` | State-file writer contract per Section 6.1 — preserve `context_limit_tokens`, set `filed_issues: []` |
+| `commands/cross-model-review-now.md` | State-file writer contract per Section 6.1 |
 | `~/.claude/CLAUDE.md` | New "GitHub Issues in Owned Repos" section (Section 7.1) — already drafted |
-| One-shot bulk script | Run during deployment to create labels in all owned repos with proper error filtering (Section 7.2) |
+| One-shot bulk script | Run during deployment to create labels in all owned repos with proper error filtering and `set -o pipefail` (Section 7.2) |
 | `state.filed_issues` schema | List of `{number, cluster, kind}` records (Section 6.1) |
 | `state.context_limit_tokens` | New project-level field; default 200000, user sets to 1000000 for 1M tier (Section 6.1) |
 
