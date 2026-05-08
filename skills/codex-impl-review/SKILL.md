@@ -305,9 +305,10 @@ impl-review-specific severity + budget routing.
    similar plain-language signal at the response level — not per-finding):
    - APPROVAL. Write `state.impl_review_approved_sha = <git HEAD sha>`.
    - Do NOT write `codex_impl_review_status` to any frontmatter — that
-     field does not exist in the schema (design §9.7 — only design-doc and
-     plan-doc frontmatter carry approval status; impl-review has no
-     artifact frontmatter).
+     field does not exist in the schema. Only design-doc and plan-doc
+     frontmatter carry approval status; impl-review has no artifact
+     frontmatter. (See §9.7 of the original design doc
+     `2026-04-29-cross-model-review-design.md` for the schema enumeration.)
    - Post summary chat note ("Codex approved impl-review after N rounds.").
    - Exit loop.
 
@@ -338,7 +339,7 @@ Otherwise, for each finding (or cluster):
      approve until all critical/important findings are resolved, so the
      loop continues until those clusters are cleared.
 
-   **3b. SEVERITY = minor (code-only):**
+   **3b. SEVERITY = minor (code-only — UI/UX minor was caught by the entry check above):**
    - Run the context-budget probe to compute `pct` (estimated working-
      context usage as a percentage). Phase 9 documents the probe procedure
      as a new section before this routing block; for now this branch
