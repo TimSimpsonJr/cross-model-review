@@ -1,6 +1,11 @@
+---
+codex_thread_id: 019e08e2-e245-7c61-acbd-91601d090978
+codex_design_review_status: in_review
+---
+
 # Autonomous Issue Filing — Design Document
 
-**Status:** Brainstorm complete; ready for writing-plans phase.
+**Status:** Brainstorm complete; under Codex design-review.
 **Date:** 2026-05-08
 **Type:** Enhancement / behavioral change to `cross-model-review` v0.1
 **Original design doc:** `2026-04-29-cross-model-review-design.md` (referenced by section number throughout)
@@ -42,53 +47,86 @@ Five changes to v0.1 behavior:
 
 ## 4. Routing rule (the gate)
 
-When Codex returns findings during any review (design / plan / impl):
+The gate has a common entry check that applies to all review modes, then a mode-specific path.
+
+**Common entry check** (every finding or cluster, regardless of mode):
 
 ```
-For each finding (or cluster of related findings):
-  1. SEVERITY = CRITICAL or IMPORTANT
-       → fix-loop (existing behavior; Codex won't approve until fixed)
+1. Codex flagged it as user-input-required (UI/UX, judgment, "user decision: ...")
+     → AUTONOMOUS: file as `design-input-needed` issue (Section 5)
+                   pick defensible default + record it in issue body
+                   continue review
+     → INTERACTIVE: ask user in chat; respect answer
 
-  2. requires user input (UI/UX, judgment, "could go either way")
-       → batch-defer to `design-input-needed` issue
-         pick defensible default + record it in issue body
+2. else → continue to mode-specific routing below
+```
 
-  3. else (code-only, defensible default available)
-       → default: fix
-         (preferred path; lean heavily this way)
-       → exception: defer as `autonomous-safe` issue when fixing would
-         risk context collapse — see Section 6 for the budget check
+User-input check **outranks severity**. A CRITICAL UI judgment call still becomes a `design-input-needed` issue — it is not force-fixed.
 
-  Throughout: prefer subagent dispatch over inline edit for any
-  non-trivial fix. Subagents offload context from the working session,
-  which is what we're protecting.
+**design-review / plan-review routing** (post entry check):
+
+```
+Substantive critique → apply to artifact (revise design or plan doc); loop
+                       until Codex approves. No code fixes at this gate;
+                       no autonomous-safe issues.
+```
+
+`autonomous-safe` issues are not produced at design/plan gates — there is no code diff yet, so context-budget pressure does not exist. The only deferral mechanism at design/plan is the user-input path above.
+
+**impl-review routing** (post entry check):
+
+```
+1. SEVERITY = CRITICAL or IMPORTANT
+     → fix-loop (subagent dispatch per cluster; existing behavior)
+
+2. SEVERITY = MINOR (code-only)
+     → default: fix (subagent dispatch preferred — see below)
+     → exception: defer as `autonomous-safe` issue when the context-budget
+       signal indicates fixing would risk collapse (Section 6)
+
+Throughout: prefer subagent dispatch over inline edit for any non-trivial
+fix. Subagents offload context from the working session, which is what
+we're protecting.
 ```
 
 **Default heavily favors fix.** Defer is the escape hatch, not the path of least resistance. The user's stated frustration with v0.1 was repeated re-dispatching of sessions to clean up batches of deferred minor items — the gate is tuned to do as much in-session as the budget allows.
 
 ### 4.1 Codex tag schema
 
-Codex returns each finding with three tags:
+Each finding Codex returns starts with a parseable tag line of this form:
+
+```
+[severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-name>]
+```
+
+The line appears as the first content of each finding so a regex parser can extract the three tags reliably.
 
 | Tag | Values | Used for |
 |---|---|---|
-| `SEVERITY` | `critical`, `important`, `minor` | Existing — gate rule 1; Codex won't approve until critical/important resolved |
-| `SCOPE` | `small`, `medium`, `large` | Context impact — see Section 4.2 |
-| `CLUSTER` | free-form name | Batching — findings sharing a cluster name group into one issue |
+| `severity` | `critical` \| `important` \| `minor` | impl-review fix-loop gate (existing behavior) |
+| `scope` | `small` \| `medium` \| `large` \| `n-a` | impl-review context-budget gate (see 4.2). `n-a` at design/plan gates where no code diff exists. |
+| `cluster` | short kebab-case name | Batching — findings sharing a cluster name group into one issue or one fix subagent. Also the durable identifier for re-flag prevention (Section 5.5). |
 
-If Codex omits a tag (e.g., for ad-hoc consultations), defaults are: `severity=minor`, `scope=medium`, `cluster=<finding's hash>` (i.e., one finding per cluster).
+**Tag-line absence handling.** If Codex omits or malforms the tag line on a finding, the parser falls back to inferring from the prose:
+- severity defaults to `minor`
+- scope defaults to `medium` at impl-review, `n-a` at design/plan
+- cluster defaults to `solo-<sha8(finding-text)>` (no batching for that finding)
 
-### 4.2 SCOPE means context impact, not change size
+These defaults make malformed tags safe rather than blocking.
 
-Codex tags `SCOPE` based on *"how much new context does this fix require Claude's working session to load?"* — using the diff as proxy for what's already hot:
+### 4.2 SCOPE only matters at impl-review
+
+`scope` is a context-impact signal for code fixes. At design-review and plan-review there is no code diff to fix — substantive critiques are applied to the design or plan doc directly, not deferred. So `scope` is `n-a` at those gates and the impl-review budget logic does not run.
+
+For impl-review specifically, Codex tags `scope` based on *"how much new context does this fix require Claude's working session to load?"* — using the diff as proxy for what's already hot:
 
 - **small** — fix is contained within files already in the diff, or trivially extends to imports of those files. A 300-line refactor across files Claude just modified is *small*: those files are loaded.
 - **medium** — fix requires modifications to 1-3 files outside the diff, or moderate cross-referencing.
 - **large** — fix requires loading many new files, exploring unfamiliar areas of the codebase, or extensive cross-cutting verification.
 
-**Universal priming gets one new paragraph clarifying this** (text in Section 8). The principle: *Codex uses the diff as proxy for what's hot in Claude's context. A fix touching files in the diff is small regardless of line count; a fix requiring unfamiliar files is medium-or-larger regardless of size.*
+**Universal priming gets a new paragraph clarifying this** (text in Section 8). The principle: *Codex uses the diff as proxy for what's hot in Claude's context. A fix touching files in the diff is small regardless of line count; a fix requiring unfamiliar files is medium-or-larger regardless of size.*
 
-The skill body's gate combines `SCOPE` with the in-skill context % check: `small` + low context % → inline fix; `small` + high context % → subagent fix (still cheap from working session perspective); `medium`/`large` + high context % → defer as issue.
+The skill body's impl-review gate combines `scope` with the in-skill context % check: `small` + low context % → inline fix; `small` + high context % → subagent fix (still cheap from working session perspective); `medium` / `large` + high context % → defer as issue.
 
 Specific thresholds and the inline-vs-subagent distinction live in the skill body, not this design doc.
 
@@ -168,7 +206,9 @@ Codex tags each finding with `CLUSTER: <name>`. Findings sharing a cluster name 
 
 When Codex re-reviews a diff in subsequent rounds, deferred-but-unfixed items still appear. Codex would otherwise re-flag them and we'd loop.
 
-**Each round's framing line includes:** *"Already filed as issues in this chain (do not re-flag): #123, #124."* The list comes from `state.filed_issues` (Section 6.1). Codex's thread memory plus the explicit hint prevents the loop.
+**Each round's framing line includes:** *"Already filed as issues in this chain (do not re-flag): cluster=<name> issue #N, cluster=<name> issue #N, ..."* The list comes from `state.filed_issues` (Section 6.1). Cluster is the durable identifier — issue titles can be edited but cluster names are set at filing time and do not change.
+
+**Defensive parser side.** When parsing Codex's next response, the skill checks each finding's `cluster` tag against `state.filed_issues[*].cluster`. If a match exists, the finding is treated as a no-op (Codex re-surfaced an already-deferred concern despite the framing). Cheap insurance against framing-hint failure.
 
 ### 5.6 Cross-link from PR
 
@@ -181,7 +221,7 @@ When the impl-review PR is created, its description gains:
 - #124 (design-input-needed): Decide cache backend: in-memory vs Redis
 ```
 
-Issue numbers come from `state.filed_issues`. Title + label re-fetched via `gh issue list --json number,title,labels --search "<numbers>"` at PR-creation time.
+Issue numbers come from `state.filed_issues`. Title is re-fetched via `gh issue view <num> --json title` per issue at PR-creation time (exact lookup, not fuzzy search). Label is read from the local state — `state.filed_issues[i].kind` ∈ {`autonomous-safe`, `design-input-needed`} — so no extra fetch needed.
 
 ### 5.7 Bidirectional cross-link
 
@@ -191,14 +231,23 @@ After PR creation, plugin runs `gh issue comment <num>` on each filed issue:
 
 This makes navigation work both ways — from PR you find the issues; from each issue you find the PR that prompted it.
 
-### 5.8 gh availability + repo gating
+### 5.8 gh availability — lazy gating
 
-`gh` is already required for autonomous-mode PR creation. Issue-filing extends the precondition check:
+`gh` is **not** checked at gate entry. A review run that fully resolves in-session (no defers) requires no `gh` and proceeds normally even on a non-GitHub remote.
 
-- At every review gate that might defer, run `gh auth status` and `gh issue list --limit 1`. Both must succeed.
-- **Autonomous + gh OK** → file issue normally
-- **Autonomous + gh fails** (not authenticated, issues disabled on repo, no GitHub remote) → HALT, consistent with existing Codex-unavailable handling. Halt-path PR includes the would-be-issue contents in a fallback section so nothing is lost
-- **Interactive mode** — design/plan user-bound questions: ask in chat as today (no issue filed); impl-review defers: ask user "file as issue or keep in PR description?" and respect the answer
+`gh` is checked only at the moment we are about to file an issue. Two checks: `gh auth status` and `gh issue list --limit 1`. The latter catches "issues disabled on repo" and "no GitHub remote" simultaneously.
+
+**Behavior on gh failure (autonomous mode):**
+
+| Gate | Failure handling |
+|---|---|
+| design-review / plan-review | Halt the chain. `state.chain_status = halted`. Post chat note explaining the halt. The artifact (design or plan doc) keeps any revisions Codex caused; Codex's thread is preserved for resumption via `/cross-model-review-now`. No PR is opened — no PR exists yet at these gates. |
+| impl-review (mid-loop) | Same: halt the chain, write halt note to a session-local halt log (`.claude/cross-model-review/halts/<chain-stem>.md` — new file, separate from the retired decisions file). Resume via `/cross-model-review-now impl`. |
+| impl-review (PR-creation closer) | Existing halt-path PR behavior unchanged: opens `gh pr create --draft` with explicit "AUTONOMOUS RUN HALTED" header, includes any unfiled defer payloads in a fallback section. |
+
+**Behavior on gh failure (interactive mode):** post chat note describing the failure and what was about to be filed; user resolves and re-invokes.
+
+**Interactive mode defer choice:** when Codex flags an item for deferral in interactive mode, the skill asks: *"File as `<label>` issue or skip (Codex will not re-flag this round; no record kept)?"* The "keep in PR description" option from the original v1 sketch is removed — that path is what this design retires. If the user picks skip, the item is gone.
 
 ## 6. Context-budget check (in-skill, no hooks)
 
@@ -207,33 +256,43 @@ The original draft of this design proposed two new hooks (`PreCompact` circuit-b
 - **`PreCompact` is too late.** In a 1M context, PreCompact fires near the end of the window — past the point of useful intervention. Users on smaller contexts hit it earlier, but the design needs to work for the 1M case.
 - **Hookify doesn't support `PostToolUse` for arbitrary tools.** Confirmed by reading hookify v0.x supported events: `bash`, `file`, `stop`, `prompt`, `all` only. Going to native Claude Code hooks would require settings.json modification + cross-platform shell scripts — meaningful plumbing for a soft signal.
 
-**Replacement: in-skill check at each loop iteration.** The impl-review skill body reads transcript file size directly at each fix-vs-defer decision point.
+**Replacement: in-skill check at each impl-review loop iteration.** The skill body uses Claude's tools directly (Glob + Bash) rather than embedded shell scripts, so the probe works regardless of host OS.
 
-```bash
-# Resolve transcript path: encoded-cwd dir, newest .jsonl
-encoded=$(pwd | sed 's|[:\\/]|-|g')
-transcript=$(ls -t ~/.claude/projects/*${encoded}*/*.jsonl 2>/dev/null | head -1)
-size=$(wc -c < "$transcript" 2>/dev/null)
-pct=$(( (size / 4) * 100 / 1000000 ))   # bytes/4 ≈ tokens, /1M context
-```
+**Probe procedure (impl-review only — design/plan have no fix-vs-defer decision):**
 
-A few lines per iteration. No hooks, no settings.json, no cross-platform issues, no late-fire problem. Sampling granularity is up to the skill body — every iteration, every Nth, etc.
+1. **Find transcript.** Use Glob with pattern `~/.claude/projects/*/*.jsonl`. Glob returns paths sorted by modification time (newest first per Glob's documented behavior). Take the first result. If Glob returns no matches, treat as `pct = 0` (fresh session); proceed with default-to-fix routing.
 
-The exact thresholds (e.g., "fix freely <70%", "small-only 70-85%", "defer >85%") live in the skill body and are tunable. The principle is: lean toward fix; defer when budget signal indicates fixing would lose more than it gains.
+2. **Read size.** `wc -c <path>` via Bash gives the byte count. (`wc` is available on Unix and on Windows under Git Bash / mingw64, both of which ship with Claude Code's environment.)
+
+3. **Compute percentage.** `pct = (bytes / 4) * 100 / context_limit_tokens` where `context_limit_tokens` comes from `state.context_limit_tokens` (Section 6.1). Defaults to `200000` for 200k models; the user sets to `1000000` for the 1M Sonnet/Opus 1M-context tier. Bytes-divided-by-4 is a rough char-to-token approximation; good enough for the soft signal we need.
+
+The probe is roughly six tool calls per check. Sampling granularity is up to the skill body — once per fix-vs-defer decision is plenty; we are not trying to track context in real time.
+
+**Thresholds and routing.** Specific values (e.g., "fix freely <70%", "small-only 70-85%", "defer >85%") live in the skill body and are tunable. The principle: lean toward fix; defer when budget signal indicates fixing would lose more than it gains.
+
+**What the probe approximates and what it misses.** The probe captures Claude's working-session context only — it is the relevant signal because the working session is what we are protecting from collapse. It does NOT account for prompt-cache state, subagent context (intentionally — subagents are off-context), or future tool calls within the same fix. Acceptable for v1; a more accurate probe is a v0.2 candidate.
 
 ### 6.1 State changes
 
-`.claude/cross-model-review.session.local.md` gains exactly one field:
+`.claude/cross-model-review.session.local.md` gains two fields:
 
 ```yaml
-filed_issues: [123, 124]
+filed_issues:
+  - {number: 123, cluster: query-builder-extract, kind: autonomous-safe}
+  - {number: 124, cluster: caching-strategy,      kind: design-input-needed}
+context_limit_tokens: 1000000   # default 200000; user-tunable for 1M tiers
 ```
 
-Just issue numbers. Title, labels, and any other metadata are re-fetched from `gh` when needed.
+`number` is the GitHub issue number for cross-link.
+`cluster` is the durable identifier for re-flag prevention (Section 5.5) — set at filing time, never changes.
+`kind` records the label so we don't have to fetch it again when constructing the PR description's "Filed for follow-up" section.
+Title is fetched on-demand via `gh issue view <num> --json title` at PR-creation time only.
 
-**Lifecycle:** scoped to the active chain. When `state.active_chain_artifact` changes (per Section 9.2 of original design), `filed_issues` resets. Old chains' issues stay in GitHub and were already listed in the merged PR; no reason to carry them forward.
+**Lifecycle of `filed_issues`:** scoped to the active chain. When `state.active_chain_artifact` changes (per Section 9.2 of the original design), `filed_issues` resets. Old chains' issues stay in GitHub and were already listed in the merged PR; no reason to carry them forward.
 
-The decisions file mechanism (`.claude/cross-model-review/decisions/<basename>.md`) is **retired entirely**. Migration handling for in-flight chains is in Section 9.
+**Lifecycle of `context_limit_tokens`:** project-level, not per-chain. Defaults to `200000` if absent (200k context tier). Set to `1000000` for the 1M tier. The user edits this once per project; it is not auto-detected because the harness does not expose model-tier context size to skills.
+
+The decisions file mechanism (`.claude/cross-model-review/decisions/<basename>.md`) is **retired** for new chains created after this enhancement lands. Pre-upgrade chains keep using the old behavior — see Section 10 for the detection rule.
 
 ### 6.2 `/cross-model-status` output additions
 
@@ -286,83 +345,162 @@ have their own conventions.
 
 ### 7.2 Bulk label creation across existing owned repos
 
-One-shot script to run as part of this work:
+One-shot script to run as part of this work. Captures stderr so we can distinguish "already exists" (idempotent skip) from real failures (permission denied, archived repo, transient network errors), and prints the real failures with the repo name so they don't disappear silently.
 
 ```bash
+#!/usr/bin/env bash
+# Requires bash. On Windows, run under Git Bash / mingw64.
+set -u
+
+LABELS=(
+  "autonomous-safe|0E8A16|Code-only follow-up; eligible for autonomous pickup"
+  "design-input-needed|D93F0B|Requires user judgment before work proceeds"
+)
+
 gh repo list TimSimpsonJr --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner' \
-  | while read repo; do
-      gh label create autonomous-safe \
-        --repo "$repo" \
-        --color "0E8A16" \
-        --description "Code-only follow-up; eligible for autonomous pickup" \
-        2>/dev/null || true
-      gh label create design-input-needed \
-        --repo "$repo" \
-        --color "D93F0B" \
-        --description "Requires user judgment before work proceeds" \
-        2>/dev/null || true
+  | while read -r repo; do
+      for entry in "${LABELS[@]}"; do
+        IFS='|' read -r name color desc <<< "$entry"
+        out=$(gh label create "$name" --repo "$repo" --color "$color" --description "$desc" 2>&1)
+        rc=$?
+        if [ $rc -eq 0 ]; then
+          echo "OK:   $repo/$name"
+        elif echo "$out" | grep -qi "already exists"; then
+          : # idempotent skip; no log
+        else
+          echo "FAIL: $repo/$name → $out" >&2
+        fi
+      done
     done
 ```
 
-Idempotent — `gh label create` errors with non-zero status if the label exists; we swallow that. Safe to re-run.
+Real failures land on stderr with the repo name attached, so they survive even if you redirect stdout. "Already exists" is the only swallowed condition.
 
-### 7.3 Plugin setup also creates labels
+The script requires `bash`. On Windows, run it under Git Bash / mingw64, both of which ship with the Claude Code environment.
 
-`/cross-model-setup` step 6 (when validating gh availability) also runs `gh label create` for both labels in the current repo. This way, even if the bulk script wasn't run for a particular repo, setup ensures labels exist before the plugin can defer anything.
+### 7.3 Plugin setup also creates labels (in owned repos only)
+
+`/cross-model-setup` runs `gh label create` for both labels in the current repo, but **only if the repo is owned by `TimSimpsonJr`**. The ownership check uses the same `git remote get-url origin | grep -E 'TimSimpsonJr/|TimSimpsonJr:'` pattern as the global CLAUDE.md rule (Section 7.1). Setup in a non-owned repo skips this step with a chat note: *"Repo is not owned by `TimSimpsonJr`; skipping plugin label creation. The plugin will halt if it tries to file an issue here — this is intentional."*
+
+This way the global "owned-repos-only" labeling rule is honored consistently. The plugin works in non-owned repos for its review-and-fix flows; it just cannot defer (which is acceptable since deferring writes to the user's tracker, and the user's tracker convention does not apply to other people's repos).
 
 ## 8. Codex universal priming changes
 
 Add to the priming text (Section 5.7 of original design doc), in the *"Modes details / Design / plan / diff review"* section:
 
 ```
-When returning findings, tag each one with:
+When returning findings, start each finding with a parseable tag line of
+this exact form:
 
-- SEVERITY: critical | important | minor
-- SCOPE: small | medium | large — context impact, NOT change size.
-  Use the diff as proxy for what's already loaded in Claude's working
-  context. A 300-line refactor inside files in the diff is "small"
-  (those files are hot). A 5-line tweak in a file outside the diff is
-  "medium" (Claude has to load it).
-- CLUSTER: <short name> — group related findings under the same cluster
-  name so they can be batched into one fix subagent or one follow-up
-  issue. Use distinct cluster names for unrelated concerns.
+  [severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]
+
+- severity: critical | important | minor — same meaning as before.
+- scope:
+  * For impl-review (code diff): small | medium | large — context impact,
+    NOT change size. Use the diff as proxy for what's already loaded in
+    Claude's working context. A 300-line refactor inside files in the
+    diff is "small" (those files are hot). A 5-line tweak in a file
+    outside the diff is "medium" (Claude has to load it).
+  * For design-review and plan-review: n-a (no code diff exists at these
+    gates; the routing logic does not consume scope here).
+- cluster: a short kebab-case name like "query-builder-extract" or
+  "auth-precedence". Group related findings under the same cluster name
+  so they can be batched into one fix subagent or one follow-up issue.
+  Use distinct cluster names for unrelated concerns. The cluster name
+  becomes the durable identifier for that group of findings; do not
+  rename it across rounds.
+
+If a finding is genuinely a user-judgment call (UI/UX, brand-relevant
+default, "could go either way"), still emit the tag line, then add the
+existing 'this is a user decision: <question>' marker as the next line.
+The user-decision marker takes routing precedence over severity.
 ```
 
 **Existing thread handling:** out of scope. Old chains running on the prior priming get the prior behavior; new chains use the new priming. (Per user direction in brainstorm.)
 
 ## 9. Setup changes
 
-### 9.1 `/cross-model-setup` step 6 refactor
+The current `/cross-model-setup` has 7 ordered steps (read from `commands/cross-model-setup.md`):
 
-Current behavior: writes hookify rule files; if both rules present, exits the step.
+1. Verify Codex MCP availability
+2. Verify Superpowers plugin
+3. Print the CLAUDE.md additions
+4. Ask whether to apply automatically
+5. Apply (write CLAUDE.md additions)
+6. Verify hookify and offer to install backup-nudge rules
+7. Suggest per-project notes
 
-New behavior: per-rule check + install. Iterate over the planned rule list (currently 2 hookify rules; this design adds no new ones); for each, write if missing, skip if present. The "if both exist, skip" short-circuit goes away — that prevented future additions from landing on existing installs.
+This design inserts two new steps and refactors one existing step:
+
+### 9.1 New step — gh validation + ownership check
+
+Inserted as **new step 3** (after Superpowers verification, before CLAUDE.md additions). Existing steps 3-7 renumber to 4-8.
+
+```
+Step 3 — Verify gh + ownership check.
+
+a. Run `gh auth status`. If non-zero exit:
+     Output: "GitHub CLI is not authenticated. Run `gh auth login` and
+     re-run /cross-model-setup. Skipping label creation; the plugin's
+     review-and-fix flows still work, but it will halt if it tries to
+     defer in autonomous mode."
+     Mark labels-step (step 7 below) as SKIP for this run.
+
+b. Run `git remote get-url origin` and check for `TimSimpsonJr/` or
+   `TimSimpsonJr:` in the result.
+     If matches → owned-repo flag = TRUE.
+     If no match → owned-repo flag = FALSE; output:
+     "Repo is not owned by TimSimpsonJr. Skipping plugin label creation
+     per the global ownership rule (~/.claude/CLAUDE.md). The plugin
+     will halt if it tries to file an issue here — intentional."
+     Mark labels-step (step 7 below) as SKIP for this run.
+```
+
+### 9.2 New step — Create plugin labels in current repo (if owned)
+
+Inserted as **new step 7** (between Apply CLAUDE.md and Verify hookify). Skipped if step 3 marked it SKIP.
+
+```
+Step 7 — Create plugin labels in current repo.
+
+For each label in [autonomous-safe, design-input-needed]:
+  Run `gh label create <name> --color <c> --description <d>` against
+  the current repo. Filter stderr per the bulk-script pattern in
+  Section 7.2: "already exists" → silent skip; any other error →
+  surface with the label name.
+```
+
+### 9.3 Existing step refactor — hookify install per-rule
+
+The current step 6 (now renumbered to step 8) writes hookify rule files but contains an "if both exist, skip" short-circuit. New behavior: per-rule check + install. Iterate over the planned rule list (currently 2 hookify rules; this design adds no new ones); for each, write if missing, skip if present. The "if both exist, skip" short-circuit goes away — that prevented future additions from landing on existing installs.
 
 This refactor is small and isolated (~10 lines). Once landed, future additions to the rule list (this design or any future) drop in cleanly.
 
-### 9.2 Label creation step
-
-`/cross-model-setup` adds a new step (between gh validation and CLAUDE.md addition):
-
-> *Step 7 — Create plugin labels in current repo.* Run `gh label create autonomous-safe ...` and `gh label create design-input-needed ...`. Idempotent; "already exists" errors swallowed.
-
-Skipped if `gh` validation in step 1 failed.
-
-### 9.3 `/cross-model-status` per-rule check
+### 9.4 `/cross-model-status` per-rule check
 
 Same refactor mirrors `/cross-model-status`: enumerate the planned rule list, check each, summarize. Output is one line: `"Hooks: N of M installed (re-run /cross-model-setup to add missing)."` — only shows the "(re-run)" suffix if N < M.
 
-## 10. Edge cases and migration
+## 10. Edge cases and pre-upgrade chains
+
+**Pre-upgrade chain detection.** A chain that started before this enhancement landed has no `filed_issues` field in its state file. The skill detects this at impl-review entry: `if state.filed_issues is absent (not just empty) → pre-upgrade chain`. Pre-upgrade chains complete under v0.1 behavior:
+
+- The decisions file at `.claude/cross-model-review/decisions/<basename>.md` keeps being written and read as before
+- PR description gets the verbatim-paste section as before
+- New issue-filing mechanism does NOT activate for that chain
+- No auto-migration: the original decisions file held a mix of user-decision items, heuristic ambiguity logs, and halt notes. Auto-converting all of them to `design-input-needed` issues would mislabel two of those three categories. Mirroring the universal-priming-update decision: old chains complete on old behavior; only new chains use new behavior.
+
+New chains (created after the upgrade) get `state.filed_issues = []` written at chain establishment, which is the marker that flips the skill to new behavior. Once the marker is set, the decisions file is never written for that chain.
+
+**Other edge cases:**
 
 | Case | Behavior |
 |---|---|
-| Existing `.claude/cross-model-review/decisions/<basename>.md` present at impl-review entry (in-flight chain from before upgrade) | Read contents; for each entry, file as `design-input-needed` issue (preserving the question + default-applied); delete the file. One-time migration per chain. |
-| Repo has GitHub issues disabled | Detected by `gh issue list` failure → treated as gh-unavailable → HALT in autonomous; ask in chat in interactive |
-| Repo isn't on GitHub (no origin or non-GitHub remote) | Same — HALT in autonomous; ask in chat in interactive |
-| User opens issue manually with these labels | Plugin doesn't interfere; only tracks issues in `state.filed_issues` (its own creations) |
-| Issue gets superseded mid-chain (decision reversed) | Plugin closes via `gh issue close <num> --reason "not planned" --comment "Superseded by <new-decision>"` and removes from `state.filed_issues` |
-| Codex omits SCOPE / CLUSTER tags | Defaults: `scope=medium`, `cluster=<finding-hash>` (one finding per cluster) |
-| Codex re-flags an already-filed item despite framing hint | Skill body filters Codex's findings against `state.filed_issues` titles before deciding fix-vs-defer (defensive — shouldn't happen often given the hint, but cheap insurance) |
+| Repo has GitHub issues disabled | `gh issue list --limit 1` fails when about to file → halt per Section 5.8 |
+| Repo isn't on GitHub (no origin or non-GitHub remote) | Same — `gh` calls fail when about to file → halt per Section 5.8 |
+| User opens issue manually with these labels | Plugin doesn't interfere; only tracks issues in `state.filed_issues` (its own creations, identified by cluster name) |
+| Issue gets superseded mid-chain (decision reversed) | Plugin closes via `gh issue close <num> --reason "not planned" --comment "Superseded by <new-decision>"` and removes the entry from `state.filed_issues` |
+| Codex omits the tag-line on a finding | Parser falls back to defaults per Section 4.1 (`severity=minor`, `scope=medium`-or-`n-a`, `cluster=solo-<sha8>`) |
+| Codex re-flags an already-filed cluster despite framing hint | Skill filters Codex's findings against `state.filed_issues[*].cluster` before deciding fix-vs-defer (Section 5.5 defensive parser) |
 
 ## 11. Out of scope
 
@@ -392,13 +530,14 @@ For the implementation plan (writing-plans phase), the changes touch:
 
 | Component | Change |
 |---|---|
-| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); in-skill context check (Section 6); re-flag prevention (Section 5.5) |
-| `skills/codex-plan-review/SKILL.md` | New routing rule applied to design-review and plan-review modes; user-bound defers go to issues (autonomous mode) |
-| Universal priming text (in both review skills) | New SCOPE/CLUSTER tag definitions (Section 8) |
-| `commands/cross-model-setup.md` | Step 6 per-rule refactor; new step 7 label creation (Sections 9.1, 9.2) |
-| `commands/cross-model-status.md` | Per-rule check + filed-issues block + (revised) hooks status line (Section 6.2, 9.3) |
-| `~/.claude/CLAUDE.md` | New "GitHub Issues in Owned Repos" section (Section 7.1) |
-| One-shot bulk script | Run during deployment to create labels in all owned repos (Section 7.2) |
-| Migration logic | One-time read+convert+delete of existing decisions files (Section 10) |
+| `skills/codex-impl-review/SKILL.md` | New routing rule (Section 4); parseable tag-line parser (Section 4.1); in-skill context-budget probe (Section 6); cluster-based re-flag prevention (Section 5.5); lazy `gh` gating (Section 5.8); pre-upgrade chain detection (Section 10) |
+| `skills/codex-plan-review/SKILL.md` | New routing rule applied at design-review and plan-review (entry check + apply-to-doc path); user-input defers file `design-input-needed` issues in autonomous mode; lazy `gh` gating (Section 5.8) |
+| Universal priming text (in both review skills) | New parseable tag-line spec (Section 8) |
+| `commands/cross-model-setup.md` | Insert new step 3 (gh validation + ownership) and new step 7 (label creation in owned repos); refactor existing step 6 (now step 8) to per-rule install; renumber steps 3-7 to 4-8 (Sections 9.1, 9.2, 9.3) |
+| `commands/cross-model-status.md` | Per-rule hooks check; filed-issues block (Sections 6.2, 9.4) |
+| `~/.claude/CLAUDE.md` | New "GitHub Issues in Owned Repos" section (Section 7.1) — already drafted |
+| One-shot bulk script | Run during deployment to create labels in all owned repos with proper error filtering (Section 7.2) |
+| `state.filed_issues` schema | List of `{number, cluster, kind}` records (Section 6.1) |
+| `state.context_limit_tokens` | New project-level field; default 200000, user sets to 1000000 for 1M tier (Section 6.1) |
 
-State schema change: `state.filed_issues` list added. Decisions file path retired (Section 6.1).
+**No migration logic.** Pre-upgrade chains (state file lacks `filed_issues` field) complete under v0.1 behavior; new chains write `filed_issues` and use new behavior. Decisions file mechanism retired only for new chains (Section 10).
