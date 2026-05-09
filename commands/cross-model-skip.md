@@ -10,9 +10,16 @@ Suppress the next Codex review trigger of any kind. One-shot.
 
 ## Steps
 
-1. Bootstrap state.
+1. Bootstrap state. If the state file is missing, fresh-create with defaults (writer contract, design §6.1) including:
 
-2. Set `state.skip_next_review = true`. Update state file.
+   ```yaml
+   filed_issues: []
+   context_limit_tokens: 200000
+   ```
+
+   alongside the other v0.1 defaults.
+
+2. Set `state.skip_next_review = true`. Update state file. **Preserve `filed_issues` and `context_limit_tokens` verbatim** — only set `skip_next_review`.
 
 3. Determine what's likely to fire next (based on conversation context — is brainstorming about to end? Did writing-plans just save? Did subagent-driven-development complete?). Identify the most likely next trigger.
 

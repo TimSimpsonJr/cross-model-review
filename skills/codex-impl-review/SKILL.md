@@ -11,6 +11,8 @@ Adversarial review of code diffs against the approved plan by Codex via MCP.
 
 **Priming for Claude:** Codex is reviewing the implementation against the approved plan. For findings flagged as bugs or plan deviations, dispatch a fix subagent (group related findings into one subagent invocation per group, not one per finding). For findings you disagree with, push back with technical reasoning. Loop until Codex approves or all CRITICAL/IMPORTANT issues are resolved.
 
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+
 ## Determining the artifact
 
 The artifact is the diff between branch-base and HEAD on the current feature branch.
@@ -68,6 +70,32 @@ Modes details:
    convergence with 'looks good' or 'approved' when no further substantive
    concerns.
 
+   When returning findings, start each finding with a parseable tag line of
+   this exact form:
+
+     [severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]
+
+   - severity: critical | important | minor — same meaning as before.
+   - scope:
+     * For impl-review (code diff): small | medium | large — context impact,
+       NOT change size. Use the diff as proxy for what's already loaded in
+       Claude's working context. A 300-line refactor inside files in the
+       diff is "small" (those files are hot). A 5-line tweak in a file
+       outside the diff is "medium" (Claude has to load it).
+     * For design-review and plan-review: n-a (no code diff exists at these
+       gates; the routing logic does not consume scope here).
+   - cluster: a short kebab-case name like "query-builder-extract" or
+     "auth-precedence". Group related findings under the same cluster name
+     so they can be batched into one fix subagent or one follow-up issue.
+     Use distinct cluster names for unrelated concerns. The cluster name
+     becomes the durable identifier for that group of findings; do not
+     rename it across rounds.
+
+   If a finding is genuinely a user-judgment call (UI/UX, brand-relevant
+   default, "could go either way"), still emit the tag line, then add the
+   existing 'this is a user decision: <question>' marker as the next line.
+   The user-decision marker takes routing precedence over severity.
+
 3. UI/UX surfacing: When you encounter a question that's genuinely a user
    judgment call (visual design, copy, interaction patterns,
    brand-relevant defaults), don't decide it yourself. Surface it: 'this
@@ -85,7 +113,9 @@ say so explicitly and ask Claude to provide what you need.
 
 2. Load state:
    - PERSISTED: read `.claude/cross-model-review.session.local.md` if present.
-     If absent, check for frontmatter resume:
+     If absent, check for frontmatter resume. (Any "write fresh state file" path
+     below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
+     writer contract above.)
      - Search `docs/plans/` on the current branch for design/plan docs whose
        frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's
@@ -104,6 +134,22 @@ say so explicitly and ask Claude to provide what you need.
    - EPHEMERAL: read in-conversation state marker (look for the most recent
      `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
      Do NOT attempt to write a state file.
+
+2.5. **Pre-upgrade chain detection.** After loading state in step 2, classify
+   the chain regime:
+   - State file was just created fresh in step 2 (or in EPHEMERAL mode,
+     marker just initialized) → set `regime = new`. The fresh-state write
+     from step 2 already emitted `filed_issues: []` per the writer
+     contract (preamble, design §6.1).
+   - State file existed AND has the `filed_issues` field (even if []) →
+     set `regime = new`.
+   - State file existed AND has NO `filed_issues` field → set
+     `regime = pre-upgrade`. Do NOT add the field — its absence is the
+     durable marker.
+
+   `regime` is consulted later in defer paths (Section 5.8 of design doc)
+   and PR-construction paths (Section 5.6 of design doc) to choose
+   between issue-filing (regime=new) and decisions-file (regime=pre-upgrade).
 
 3. If `state.skip_next_review == true`: clear flag (write state file in
    PERSISTED mode; update in-context marker in EPHEMERAL mode), post chat
@@ -231,51 +277,388 @@ For this skill, `<this-mode>` is `impl-review`. Content includes:
 - The diff (full `git diff <branch-base>..HEAD` output).
 - Brief framing line: "Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming."
 
+**Re-flag prevention framing.** If `state.filed_issues` is non-empty,
+prepend to the artifact content (after the `[MODE: ...]` tag and any
+`[CHAIN-BOUNDARY]` marker, before the actual artifact body):
+
+> Already filed as issues in this chain (do not re-flag): cluster=<name>
+> issue #<number>, cluster=<name> issue #<number>, ...
+
+Cluster is the durable identifier — issue titles can be edited but
+cluster names are set at filing time and do not change. The list comes
+from `state.filed_issues` (Section 6.1 of the autonomous-issue-filing
+design doc); read each entry's `cluster` and `number` fields.
+
+If `state.filed_issues` is empty, omit the framing line entirely.
+
+## Context-budget probe (impl-review only)
+
+Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
+(estimated working-context usage as a percentage). Per design §6.
+
+### Probe procedure
+
+1. **Resolve project's transcript directory.** Get the repo toplevel via
+   `git rev-parse --show-toplevel`. Then transform that path into Claude
+   Code's encoded directory name by replacing each of `:`, `/`, and `\`
+   with `-`. Claude does this string transformation in-prompt — no shell
+   substitution required, so it works the same on Windows and Unix.
+   Example: a Windows toplevel `C:/Users/tim/OneDrive/Documents/Projects/cross-model-review`
+   becomes `C--Users-tim-OneDrive-Documents-Projects-cross-model-review`.
+   The result is the directory name under `~/.claude/projects/` that
+   holds this project's transcripts.
+
+   ```bash
+   toplevel=$(git rev-parse --show-toplevel)
+   # Encoded form: replace :, /, \ with - (Claude does this in-prompt; the
+   # variable is named `encoded` for the Glob step below).
+   ```
+
+2. **Find this project's newest transcript.** Use Glob with the literal
+   pattern `~/.claude/projects/<encoded>/*.jsonl` — substitute the value
+   from step 1 into the pattern string. Glob returns paths sorted by
+   modification time (newest first). Take the first result and assign
+   it to `transcript`. If Glob returns no matches, treat as `pct = 0`
+   (fresh session); proceed with default-to-fix routing.
+
+3. **Read size.**
+   ```bash
+   bytes=$(wc -c < "$transcript")
+   ```
+   `<` is shell input redirection; `"$transcript"` is the path captured
+   in step 2. Double-quoted variable handles paths with spaces. `wc -c`
+   over stdin emits just the byte count without the filename prefix —
+   exactly what we want for arithmetic.
+
+4. **Compute percentage.**
+   ```bash
+   pct=$(( bytes * 100 / 4 / context_limit_tokens ))
+   ```
+   `context_limit_tokens` comes from `state.context_limit_tokens` (default
+   200000; user sets 1000000 for the 1M Sonnet/Opus 1M-context tier).
+   `bytes / 4` is a rough char-to-token approximation. Order matters in
+   integer arithmetic: multiply by 100 BEFORE dividing to avoid zero
+   from rounding.
+
+### Sampling
+
+Once per fix-vs-defer decision is sufficient. Do NOT run on every tool
+call; the probe is a soft signal, not a real-time tracker. ~4 tool
+calls per check (one Bash for toplevel, one Glob, one Bash for `wc`,
+plus arithmetic).
+
+### What the probe approximates and what it misses
+
+The probe captures Claude's working-session context only — the relevant
+signal because the working session is what we're protecting from
+collapse. It does NOT account for:
+- Prompt-cache state
+- Subagent context (intentionally — subagents are off-context)
+- Future tool calls within the same fix
+
+Acceptable for v1; a more accurate probe is a v0.2 candidate.
+
 ## Response handling loop
 
-After receiving Codex response, three branches:
+### Tag-line parser
+
+Each finding from Codex begins with a tag line of the form:
+
+  `[severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]`
+
+Regex-extract the three values from each finding's first line. Defaults
+when the tag line is missing or malformed:
+- `severity` → `minor`
+- `scope` → `medium` (impl-review default per design §4.1; the budget
+  gate below consumes scope)
+- `cluster` → `solo-<sha8(finding-text)>` (no batching for that finding)
+
+These defaults make malformed tags safe rather than blocking. See design
+§4.1.
+
+### Defensive re-flag filter
+
+After parsing each finding's tag line (severity, scope, cluster), check
+the cluster against `state.filed_issues`:
+
+```text
+# Pseudocode — Claude executes this conceptually rather than as a script.
+for filed in state.filed_issues:
+    if finding.cluster == filed.cluster:
+        # Codex re-surfaced an already-deferred concern despite the framing.
+        # Treat as no-op for this round.
+        log("Codex re-flagged already-filed cluster '<name>' (issue #<N>); ignored.")
+        skip this finding
+```
+
+Why it matters: cluster is the durable identifier set at filing time;
+mid-loop title edits or rewordings on the issue won't break this match.
+The framing in the MCP call is the primary prevention; this filter is
+defensive insurance against the framing being ignored.
+
+Apply this filter BEFORE the routing logic in the Routing sub-section
+below. A filtered finding does NOT count toward the fix-loop or
+budget-gate decisions.
+
+### Routing (design §4 impl-review path)
+
+After receiving Codex response, first check session-level convergence;
+otherwise route each finding through the common entry check, then the
+impl-review-specific severity + budget routing.
 
 1. **Convergence signal** ("looks good", "approved", "no further concerns",
-   similar plain-language signal):
-   - For design-review / plan-review / impl-review: APPROVAL. Write
-     `codex_<kind>_status: approved` and `codex_<kind>_approved_hash:
-     <sha256>` to the artifact's frontmatter. For impl-review, write
-     `state.impl_review_approved_sha = <git HEAD sha>`.
-   - **Note for impl-review:** do NOT write `codex_impl_review_status` to
-     any artifact's frontmatter — that field does not exist in the schema.
-     The impl-review approval lives only in
-     `state.impl_review_approved_sha = <git HEAD sha>`. Per design doc §9.7,
-     only design-doc and plan-doc frontmatter carry approval status.
-   - For brainstorm-partner: HANDOFF. Brainstorming converges naturally
-     (this is upstream skill behavior; this skill just relays).
-   - Post summary chat note ("Codex approved <kind> after N rounds.").
+   similar plain-language signal at the response level — not per-finding):
+   - APPROVAL. Write `state.impl_review_approved_sha = <git HEAD sha>`.
+   - Do NOT write `codex_impl_review_status` to any frontmatter — that
+     field does not exist in the schema. Only design-doc and plan-doc
+     frontmatter carry approval status; impl-review has no artifact
+     frontmatter. (See §9.7 of the original design doc
+     `2026-04-29-cross-model-review-design.md` for the schema enumeration.)
+   - Post summary chat note ("Codex approved impl-review after N rounds.").
    - Exit loop.
 
-2. **User-bound question** (Codex tagged "this is a user decision: ..." OR
-   Claude classifies as UI/UX):
-   - In INTERACTIVE mode: post question in chat with optional
-     PushNotification fire; end Claude turn (turn-taking handles pause).
-   - In AUTONOMOUS mode: append to per-chain decisions file
-     (`.claude/cross-model-review/decisions/<basename>.md`) with stable
-     handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick most
-     defensible default; continue loop with default applied.
+Otherwise, for each finding (or cluster):
 
-3. **Substantive critique** (Codex flagged issues to address):
-   - Apply critique to artifact (edit design doc, edit plan, dispatch fix
-     subagent for impl-review per Section 5.4 of design doc).
-   - Loop back to "Codex MCP call" with revised content.
+2. **Common entry check — user-input flagged** (Codex tagged "this is a
+   user decision: ..." OR Claude classifies as UI/UX):
+   - INTERACTIVE: post question in chat with optional PushNotification
+     fire; end Claude turn (turn-taking handles pause).
+   - AUTONOMOUS + regime = new: batch-defer to a `design-input-needed`
+     issue. (See the **Issue filing** section below for the helper
+     mechanics.)
+   - AUTONOMOUS + regime = pre-upgrade: append to per-chain decisions
+     file (`.claude/cross-model-review/decisions/<basename>.md`) with
+     stable handle (`decision-<YYYY-MM-DD>-<HHMM>-<4char-hash>`); pick
+     most defensible default; continue loop with default applied.
+     (Existing v0.1 behavior — unchanged.)
+
+   **This check outranks severity** — even a CRITICAL UI judgment call
+   routes here, not into the fix-loop or budget gate below.
+
+3. **Impl-review-specific routing** (post entry check):
+
+   **3a. SEVERITY = critical or important:**
+   - Existing fix-loop. Group related findings by `cluster`; dispatch ONE
+     fix subagent per cluster (existing outcome-based behavior — a
+     subagent can address one finding or several in one pass). Codex won't
+     approve until all critical/important findings are resolved, so the
+     loop continues until those clusters are cleared.
+
+   **3b. SEVERITY = minor (code-only — UI/UX minor was caught by the entry check above):**
+   - Run the context-budget probe (Section above: **Context-budget probe**)
+     to compute `pct` (estimated working-context usage as a percentage).
+   - Then route by `pct` and `scope`:
+     - `pct < 70%` AND `scope == small` → inline fix.
+     - `pct < 85%` AND `scope ∈ {small, medium}` → subagent fix
+       (offloads context from the working session).
+     - else → batch-defer to an `autonomous-safe` issue. (See the
+       **Issue filing** section below for the helper mechanics.)
+
+   Specific thresholds: `threshold_low = 70%`, `threshold_high = 85%`.
+
+   Throughout: prefer subagent dispatch over inline edit for any
+   non-trivial fix. Subagents offload context from the working session,
+   which is what the budget gate is protecting.
+
+**Note:** at impl-review, `autonomous-safe` issues ARE produced when the
+context-budget signal indicates that fixing would lose more than it gains.
+This is the inverse of the design/plan gates, where no autonomous-safe
+issues are filed because no code diff exists. Here, the diff exists and
+fixing it competes for working-session context.
 
 After every loop iteration: update `state.last_invocation = now()`,
 `state.last_invocation_kind = "impl-review"`.
 
-For this skill specifically:
+**Approval condition:** Codex approves OR all CRITICAL/IMPORTANT findings
+are fixed (MINOR findings are routed per 3b — fixed in-session or
+deferred to issues — and do not block approval).
 
-- **Findings handled outcome-based, not finding-based.** Group related findings (same module, same edge case, same design gap). For each group, dispatch ONE fix subagent with all related findings together. A subagent can address one finding or several in one pass.
-- **Severity routing:**
-  - CRITICAL: dispatch fix subagent immediately, loop.
-  - IMPORTANT: dispatch fix subagent immediately, loop.
-  - MINOR: log in PR description as "noted, deferred." Don't necessarily fix.
-- **Approval condition:** Codex approves OR all CRITICAL/IMPORTANT are fixed.
+## Issue filing (autonomous mode, new-regime chains)
+
+When a defer-path routes to issue-filing (autonomous mode + `regime = new`),
+follow these steps. The text below is identical between `codex-plan-review`
+and `codex-impl-review` per the "no shared `prompts/` directory" architecture
+(MANIFEST.md); changes must be applied to both copies.
+
+1. **Group by cluster.** Findings sharing a `cluster` tag (extracted by
+   the tag-line parser earlier in this skill) batch into one issue per
+   cluster. If a cluster mixes `autonomous-safe` and `design-input-needed`
+   defers, split into two issues — one per kind. If Codex omitted the
+   cluster tag, the parser's `solo-<sha8(...)>` default means each finding
+   becomes its own cluster (no batching).
+
+2. **Compose the title.** Format: `[<chain-stem>] <imperative description>`.
+   The stem comes from the existing stem-matching algorithm specified in
+   the original design doc `2026-04-29-cross-model-review-design.md` §9.2:
+   strip leading `YYYY-MM-DD-` date prefix, strip trailing
+   `-design`/`-plan`/`-impl` suffix, strip `.md` extension. For anchorless
+   impl-only chains (`state.active_chain_artifact = "branch:<branch-name>"`),
+   the stem is `branch:<branch-name>` verbatim.
+
+3. **Compose the body** (markdown, no frontmatter) per design §5.3.
+
+   **For `autonomous-safe`:**
+
+   ```markdown
+   ## Context
+   - **Chain:** `<active_chain_artifact path or branch:ref>`
+   - **Branch:** `<current branch>`
+   - **Filed during:** <gate-name> (commit <short-sha>)
+
+   ## Findings (cluster: <cluster-name>)
+   - **<SEVERITY> / <SCOPE> scope** — <finding 1 description>
+   - (repeat per finding in the cluster)
+
+   ## Suggested approach
+   <Codex's recommended fix as one paragraph or bullet list>
+
+   ## Acceptance criteria
+   - [ ] <criterion 1, derived from Codex's Suggested approach>
+   - (repeat per criterion)
+
+   ---
+   🤖 Filed by cross-model-review during <gate-name> on <YYYY-MM-DD>.
+   ```
+
+   `<gate-name>` is one of `design-review`, `plan-review`, or
+   `impl-review` — match the skill name exactly (lowercase kebab-case).
+
+   **For `design-input-needed`,** replace `Suggested approach` and
+   `Acceptance criteria` with:
+
+   ```markdown
+   ## Decision needed
+   <the question Codex flagged>
+
+   ## Default applied (autonomous run)
+   <what Claude+Codex picked, with reasoning>
+
+   ## How to resolve
+   - Comment with your preferred answer to override
+   - Close as completed if the default is acceptable
+   - Close as superseded if circumstances changed before resolution
+   ```
+
+   The Context block, the closing footer line, and the bot-footer divider
+   are constant across both kinds.
+
+4. **Run the defer-path preconditions** before invoking `gh`. See the
+   **Defer-path preconditions** sub-section below for the three concrete
+   bash invocations (ownership, `gh auth status`, `gh issue list --limit
+   1`) and the failure-routing table per gate / mode (design §5.8). All
+   three checks must pass before reaching step 5.
+
+5. **File via `gh issue create`, capturing the issue number.** `gh issue
+   create` writes the new issue's URL to stdout (e.g.,
+   `https://github.com/owner/repo/issues/123`). The snippet below
+   composes the body into a temp file (avoids a heredoc-EOF collision if
+   Codex's findings or recommendations contain a literal `EOF` line —
+   e.g., when reviewing shell scripts that themselves use heredocs),
+   files via `--body-file`, then validates the extracted issue number
+   with a regex before appending to `state.filed_issues`. The
+   `<chain-stem>`, `<description>`, body content, and label value are
+   placeholders the skill substitutes per the steps above.
+
+```bash
+# Compose the body content into a temp file (avoids heredoc-EOF
+# collision if the body contains a literal "EOF" line). The inner
+# heredoc uses a unique sentinel that won't collide with English prose.
+body_file=$(mktemp -t cmr-issue-body.XXXXXX)
+cat > "$body_file" <<'MARKER_BODY_EOF'
+<body content goes here — verbatim from the templates above>
+MARKER_BODY_EOF
+
+issue_url=$(gh issue create \
+  --title "[<chain-stem>] <description>" \
+  --body-file "$body_file" \
+  --label "<autonomous-safe|design-input-needed>") || {
+  echo "ERROR: gh issue create failed (exit $?)" >&2
+  rm -f "$body_file"
+  exit 1
+}
+
+issue_number="${issue_url##*/}"
+[[ "$issue_number" =~ ^[0-9]+$ ]] || {
+  echo "ERROR: could not extract issue number from gh output: $issue_url" >&2
+  rm -f "$body_file"
+  exit 1
+}
+rm -f "$body_file"
+```
+
+   The `${var##*/}` parameter expansion strips everything up to and
+   including the last `/`, leaving just the issue number. The
+   `[[ ... =~ ^[0-9]+$ ]]` regex test then asserts the result is purely
+   digits — guards against trailing-slash URLs, malformed gh output,
+   etc. On extraction failure, treat as a `gh-issue-list`-precondition
+   failure with the extraction failure as the chat-note detail (route
+   per the failure-handling table in **Defer-path preconditions** below).
+
+   On success, append
+   `{number: $issue_number, cluster: "<cluster-name>", kind: "<label>"}`
+   to `state.filed_issues` and persist state (PERSISTED mode: write
+   `.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
+   the in-context `[cmr-state: ...]` marker).
+
+   If `gh issue create` itself fails (non-zero exit, OR exit zero but
+   stdout is empty / does not contain a recognizable issues URL), surface
+   as a halt per the **Defer-path preconditions** failure table — the
+   issue was supposed to be filed but isn't, so the chain cannot be
+   considered safely deferred.
+
+6. **Bidirectional cross-link** (impl-review's PR-creation closer — NOT
+   done at filing time). When the PR is opened by `codex-impl-review`,
+   the skill runs `gh issue comment <number>` on each entry in
+   `state.filed_issues`: *"Originally filed during PR #N: <url>"*. See
+   `codex-impl-review`'s **Termination handoff** section for the PR-time
+   mechanics and failure-tolerance rules. This skill at design-review
+   and plan-review gates does not perform the cross-link itself; it only
+   appends to `state.filed_issues` so the impl-review closer has the
+   data to work with.
+
+### Defer-path preconditions
+
+Before any `gh issue create`, run these three checks IN ORDER. All three
+must pass; first failure routes to halt-or-chat per the failure table below.
+
+1. **Ownership.**
+   ```bash
+   git remote get-url origin 2>/dev/null | grep -E "TimSimpsonJr/|TimSimpsonJr:" || exit 1
+   ```
+   Non-zero → ownership precondition failed. The `2>/dev/null` silences
+   git's "No such remote 'origin'" stderr noise on repos lacking origin —
+   the precondition-failure chat note explains the situation more usefully.
+
+2. **gh auth.**
+   ```bash
+   gh auth status >/dev/null 2>&1
+   ```
+   Non-zero → auth precondition failed.
+
+3. **gh issue list.**
+   ```bash
+   gh issue list --limit 1 >/dev/null 2>&1
+   ```
+   Non-zero → repo-issues precondition failed (issues disabled, no
+   GitHub remote, etc.).
+
+On any precondition failure:
+
+- **AUTONOMOUS + design-review or plan-review gate** → set
+  `state.chain_status = halted`; post chat note naming which precondition
+  failed (`ownership`, `gh-auth`, or `gh-issue-list`).
+- **AUTONOMOUS + impl-review mid-loop** → halt; write halt note to
+  `.claude/cross-model-review/halts/<chain-stem>.md` (new file, separate
+  from the retired decisions file).
+- **AUTONOMOUS + impl-review PR-creation closer** → existing draft-PR
+  halt path (Section 9.6 of the original design doc
+  `2026-04-29-cross-model-review-design.md`); include unfiled defer
+  payloads in the fallback section of the PR description.
+- **INTERACTIVE** → post chat note describing failure; user resolves
+  and re-invokes. For ownership specifically, include this policy
+  explanation: *"This repo is not owned by you, so the
+  cross-model-review labeling convention doesn't apply. The plugin
+  will not file issues here."*
 
 ## Termination handoff
 
@@ -291,7 +674,73 @@ After approval:
 **Autonomous mode** — PR creation is the chain closer:
 
 1. Run `gh pr create` with description per template.
-2. Description includes: summary, all three approvals' status, decisions-pending file contents, any error notes, test plan from the original plan, "Generated with cross-model-review" footer.
+2. Description includes: summary, all three approvals' status, any error
+   notes, test plan from the original plan, "Generated with
+   cross-model-review" footer, plus a deferred-items section whose shape
+   depends on `regime`:
+   - regime = pre-upgrade: paste the per-chain decisions file contents
+     verbatim under "Decisions deferred to your review." (Existing v0.1
+     behavior — unchanged.)
+   - **regime = new:** the PR description gains a "## Filed for follow-up"
+     section listing the issues filed during this chain.
+
+     **Construction:**
+     - Source: `state.filed_issues` (each entry has `{number, cluster, kind}`).
+     - For each entry, fetch the title via `gh issue view <number> --json title --jq .title`
+       (exact lookup, not fuzzy search). Label is read from the local
+       `kind` field — no extra fetch needed.
+     - Format each line as: `- #<number> (<kind>): <title>`.
+     - If `state.filed_issues` is empty, omit the section entirely (no
+       "(none)" placeholder).
+
+     Example output:
+
+     ```markdown
+     ## Filed for follow-up
+
+     - #123 (autonomous-safe): Extract query builder into separate module
+     - #124 (design-input-needed): Decide cache backend: in-memory vs Redis
+     ```
+
+     Concrete bash for the construction loop:
+
+     ```bash
+     if [ "${#filed_issues[@]}" -gt 0 ]; then
+       {
+         echo
+         echo "## Filed for follow-up"
+         echo
+         for entry in "${filed_issues[@]}"; do
+           # entry format: "number|cluster|kind"
+           IFS='|' read -r num cluster kind <<< "$entry"
+           title=$(gh issue view "$num" --json title --jq .title)
+           echo "- #${num} (${kind}): ${title}"
+         done
+       } >> pr_description.md
+     fi
+     ```
+
+     (The exact array-encoding of `state.filed_issues` is a yaml-parsing
+     concern; this snippet uses a `number|cluster|kind` pipe-separated
+     intermediate form. Skill body translates state YAML to that form
+     before the loop.)
+
+     **Bidirectional cross-link** (after `gh pr create` returns the PR URL):
+
+     For each entry in `state.filed_issues`:
+
+     ```bash
+     for entry in "${filed_issues[@]}"; do
+       IFS='|' read -r num cluster kind <<< "$entry"
+       gh issue comment "$num" --body "Originally filed during PR #${pr_number}: ${pr_url}" \
+         || echo "WARN: cross-link comment failed for issue #${num}; PR is the load-bearing artifact, continuing." >&2
+     done
+     ```
+
+     Best-effort: if `gh issue comment` fails for an individual issue, log
+     the failure to the chain's halt log (or chat note in interactive)
+     but do NOT halt the chain — the PR already exists and is the
+     load-bearing artifact.
 3. **Branch on result:**
    - **PR creation succeeded** (gh exits 0, PR URL returned):
      - Set `state.chain_status = "completed"`.
@@ -299,7 +748,10 @@ After approval:
      - Fire local PushNotification if available.
    - **PR creation failed** (non-zero exit, network error, gh not authenticated, etc.):
      - Capture the error.
-     - Treat as halt scenario: write halt note to per-chain decisions file with PR creation failure detail; transition `state.chain_status = "halted"`.
+     - Treat as halt scenario:
+       - regime = new: write halt note to `.claude/cross-model-review/halts/<chain-stem>.md` with PR creation failure detail.
+       - regime = pre-upgrade: write halt note to per-chain decisions file (existing v0.1 behavior — unchanged).
+     - Transition `state.chain_status = "halted"`.
      - Post chat note: *"Implementation approved by Codex but PR creation failed: <error>. State left as `halted`. Resolve the gh / network issue and run `gh pr create` manually, or invoke `/cross-model-review-now impl` to retry the autonomous closer."*
      - Fire notification (autonomous halts notify per Section 9.6 of design doc).
 
@@ -309,7 +761,7 @@ The contract: `chain_status: completed` means a PR exists for this work. If no P
 
 ## Halt conditions specific to impl-review
 
-- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR per the **Halt-path PRs are draft** rule above if useful work was done; describe in halt note in decisions file).
+- Branch in dirty state at start: ask in interactive; HALT in autonomous (open `--draft` PR per the **Halt-path PRs are draft** rule above if useful work was done; describe in halt note — written to `.claude/cross-model-review/halts/<chain-stem>.md` for regime = new chains, or to the per-chain decisions file for regime = pre-upgrade chains).
 - subagent-driven-development task fails after retries: surface in chat (interactive); HALT in autonomous.
 - Branch-base undeterminable: skip with warning (interactive); HALT in autonomous.
 - Codex unavailable: HALT in autonomous mode (Section 9.6 of design doc — review is a critical gate).

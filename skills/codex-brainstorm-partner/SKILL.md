@@ -11,6 +11,8 @@ Codex stands in for the user during a brainstorming flow. Routes Claude's brains
 
 **No priming for Claude.** Claude doesn't get any peer-review framing. The brainstorming flow proceeds normally; this skill operates between Claude asking a question and Claude reading "the user's response."
 
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+
 ## Universal Codex priming
 
 The text below is the universal priming string. Send it verbatim to Codex on the first MCP call per project (the fresh-thread path in the **Codex MCP call** section). It establishes Codex's role across all modes this project will use.
@@ -56,6 +58,32 @@ Modes details:
    convergence with 'looks good' or 'approved' when no further substantive
    concerns.
 
+   When returning findings, start each finding with a parseable tag line of
+   this exact form:
+
+     [severity:critical|important|minor, scope:small|medium|large|n-a, cluster:<short-kebab-name>]
+
+   - severity: critical | important | minor — same meaning as before.
+   - scope:
+     * For impl-review (code diff): small | medium | large — context impact,
+       NOT change size. Use the diff as proxy for what's already loaded in
+       Claude's working context. A 300-line refactor inside files in the
+       diff is "small" (those files are hot). A 5-line tweak in a file
+       outside the diff is "medium" (Claude has to load it).
+     * For design-review and plan-review: n-a (no code diff exists at these
+       gates; the routing logic does not consume scope here).
+   - cluster: a short kebab-case name like "query-builder-extract" or
+     "auth-precedence". Group related findings under the same cluster name
+     so they can be batched into one fix subagent or one follow-up issue.
+     Use distinct cluster names for unrelated concerns. The cluster name
+     becomes the durable identifier for that group of findings; do not
+     rename it across rounds.
+
+   If a finding is genuinely a user-judgment call (UI/UX, brand-relevant
+   default, "could go either way"), still emit the tag line, then add the
+   existing 'this is a user decision: <question>' marker as the next line.
+   The user-decision marker takes routing precedence over severity.
+
 3. UI/UX surfacing: When you encounter a question that's genuinely a user
    judgment call (visual design, copy, interaction patterns,
    brand-relevant defaults), don't decide it yourself. Surface it: 'this
@@ -69,15 +97,35 @@ say so explicitly and ask Claude to provide what you need.
 
 Brainstorm-partner is opt-in and turn-based, so its bootstrap is much lighter than the review skills:
 
-1. Read `.claude/cross-model-review.session.local.md` (or use ephemeral fallback — look for the most recent `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
+1. Read `.claude/cross-model-review.session.local.md` (or use ephemeral fallback — look for the most recent `[cmr-state: ...]` line in transcript, or treat as fresh if absent). Any "write fresh state file" path below emits `filed_issues: []` and `context_limit_tokens: 200000` per the writer contract above.
    - If absent and at least one design/plan doc with `codex_thread_id` exists in `docs/plans/` on the current branch, apply the frontmatter-resume disambiguation rule:
      - Search `docs/plans/` on the current branch for design/plan docs whose frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's most-recent commits.
      - If exactly ONE candidate → attempt `mcp__codex__codex-reply` with that threadId. On success: write fresh state file with that thread_id and artifact path as `active_chain_artifact`. On failure (thread expired): fall through to fresh-thread path with recovery handoff per design doc Section 5.8.
      - If ZERO candidates → write fresh state file with defaults; first MCP call this project will create a new thread.
      - If MULTIPLE candidates → write fresh state file with defaults; post chat note: "Multiple design/plan docs in `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact."
-2. **Do NOT check `skip_next_review`.** Skip is review-only.
-3. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
+2. **Pre-upgrade chain detection.** After loading state in step 1, classify
+   the chain regime:
+   - State file was just created fresh in step 1 (or in EPHEMERAL mode,
+     marker just initialized) → set `regime = new`. The fresh-state write
+     from step 1 already emitted `filed_issues: []` per the writer
+     contract (preamble, design §6.1).
+   - State file existed AND has the `filed_issues` field (even if []) →
+     set `regime = new`.
+   - State file existed AND has NO `filed_issues` field → set
+     `regime = pre-upgrade`. Do NOT add the field — its absence is the
+     durable marker.
+
+   In the review skills (`codex-plan-review`, `codex-impl-review`),
+   `regime` is consulted later in defer paths and PR-construction paths
+   to choose between issue-filing (regime=new) and decisions-file
+   (regime=pre-upgrade). For `codex-brainstorm-partner` specifically,
+   the regime detection above only feeds the writer contract (fresh
+   writes emit `filed_issues: []`); the response-handling defer path
+   below stays on v0.1 behavior regardless of regime. The design's
+   issue-filing extension was scoped to the three review gates only.
+3. **Do NOT check `skip_next_review`.** Skip is review-only.
+4. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
 
 (No `state.paused` check — that field is not part of the v0.1 schema; brainstorm-partner is gated only by user opt-in.)
 
@@ -159,7 +207,13 @@ Codex's response IS the user's response, semantically. Claude reads it as conver
 
 If Codex responds with "this is a UI/UX call I shouldn't make for Tim — surface it: <question>":
 - Interactive mode: pause, post in chat with notification, wait for user.
-- Autonomous mode: log to per-chain decisions file with defensible default; continue.
+- Autonomous mode: log to per-chain decisions file with defensible
+  default; continue. (Existing v0.1 behavior — unchanged. The design's
+  issue-filing extension was scoped to the three review gates only;
+  brainstorm-partner does not run a review loop and stays on v0.1
+  behavior regardless of regime. The bootstrap regime-detection at
+  step 2 above informs the writer contract but does not gate this
+  defer path.)
 
 If Codex responds with "looks good, write the plan" or convergence signal:
 - Brainstorming converges naturally (this is `brainstorming` skill's flow; this skill just relays).

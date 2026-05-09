@@ -27,10 +27,13 @@ cross-model-review/
 │   └── cross-model-reset.md                       # fresh chain in this project
 ├── docs/
 │   ├── plans/
-│   │   ├── 2026-04-29-cross-model-review-design.md   # full design doc
-│   │   └── 2026-04-29-cross-model-review-plan.md     # this implementation plan
+│   │   ├── 2026-04-29-cross-model-review-design.md      # original v0.1 design doc
+│   │   ├── 2026-04-29-cross-model-review-plan.md        # v0.1 implementation plan
+│   │   └── 2026-05-08-autonomous-issue-filing-design.md # v0.2 design doc (issue filing)
 │   └── handoffs/
 │       └── 2026-04-29-cross-model-review-sdd-handoff.md  # SDD kickoff handoff for fresh session
+├── scripts/
+│   └── bulk-create-labels.sh                      # one-shot label creation across owned repos (v0.2 §7.2)
 ├── README.md                                      # install + usage + privacy note
 ├── CHANGELOG.md
 ├── MANIFEST.md                                    # this file
@@ -48,3 +51,5 @@ cross-model-review/
 - **Frontmatter persistence as cross-machine bridge**: design doc and plan doc frontmatter store `codex_thread_id`, approval status, and approval hashes. These let a fresh install on a new machine resume the chain by reading frontmatter.
 - **Hookify rule delivery (no static `hooks/` directory)**: native Claude Code hooks don't support transcript-pattern matching at Stop events, so the plugin ships no static `hooks/hooks.json`. Instead, `/cross-model-setup` writes hookify-format rules into the host project's `.claude/` directory at install time. The plugin works without hookify installed — Layers 1+2 (skill bodies + CLAUDE.md) carry the load and the hookify Layer 3 is a backup nudge only.
 - **Hooks are advisory-only**: hookify-emitted rules never mutate state — they only inject reminder prompts when transcript patterns match. Skip-flag respect lives inside the prompt body itself (soft enforcement: the hookify message tells the model to honor the skip flag, but doesn't itself check filesystem state). Skill bodies and CLAUDE.md are the load-bearing layers.
+- **Issue-filing helper duplicated across two skills**: `skills/codex-plan-review/SKILL.md` and `skills/codex-impl-review/SKILL.md` carry byte-identical `## Issue filing` sections per the no-shared-prompts/ architecture. Verified by `diff` after each edit. v0.2 added this section.
+- **Hookify rule list duplicated across setup and status**: `commands/cross-model-setup.md` step 8 and `commands/cross-model-status.md` step 5 both enumerate the planned hookify rule files. Cross-reference notes in both files remind maintainers to update in lockstep when rules are added.
