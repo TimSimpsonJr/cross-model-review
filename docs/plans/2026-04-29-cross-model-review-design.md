@@ -14,7 +14,7 @@
 
 ## 1. Goal
 
-Integrate Codex (OpenAI's coding model, available as MCP) into the Superpowers workflow as an adversarial reviewer at three lifecycle moments and as an opt-in brainstorming partner. Eliminate the manual copy-paste handoff currently required between Claude and Codex during design and review steps. Enable overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval for code-only decisions.
+Integrate Codex (OpenAI's coding model, invoked via the `codex` CLI in v0.3.0+; previously via MCP in v0.1/v0.2) into the Superpowers workflow as an adversarial reviewer at three lifecycle moments and as an opt-in brainstorming partner. Eliminate the manual copy-paste handoff currently required between Claude and Codex during design and review steps. Enable overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval for code-only decisions.
 
 The plugin layers on top of Superpowers (`brainstorming`, `writing-plans`, `subagent-driven-development`) without modifying upstream skills.
 
@@ -236,7 +236,7 @@ Both share the same Codex thread, so plan-review can reference the design discus
 
 ### 5.6 Ad-hoc consultation
 
-**Owner:** CLAUDE.md routing + direct MCP call. NOT a skill.
+**Owner:** CLAUDE.md routing + direct async CLI call (`codex exec` via Bash `run_in_background`). NOT a skill.
 
 **Trigger:** User says "ask codex about X" / "what does codex think" → Claude composes a prompt file with `[MODE: ad-hoc]` + the question and launches `codex exec resume <state.codex_thread_id>` (or fresh `codex exec` with universal priming if no thread yet) via Bash with `run_in_background: true`, per the **Codex async CLI invocation** pattern in §5.9. On bg completion, Claude surfaces Codex's reply to the user.
 
