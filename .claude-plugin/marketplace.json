@@ -5,14 +5,14 @@
     "email": "tim@timsimpsonjr.com"
   },
   "metadata": {
-    "description": "Codex MCP integration for adversarial review of designs, plans, and implementations.",
-    "version": "0.1.0"
+    "description": "Codex integration via async CLI invocation for adversarial review of designs, plans, and implementations.",
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "cross-model-review",
       "source": "./",
-      "description": "Codex MCP integration for adversarial review of designs, plans, and implementations. Layers on Superpowers without modifying upstream skills."
+      "description": "Codex integration via async CLI invocation for adversarial review of designs, plans, and implementations. Layers on Superpowers without modifying upstream skills."
     }
   ]
 }
