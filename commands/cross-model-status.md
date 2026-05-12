@@ -12,18 +12,15 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
 
 1. **Pure-read.** Do NOT create the state file if absent.
 
-2. Resolve state in this order (matches Block B's storage-mode detection):
+2. Resolve state in this order:
 
    a. Read `.claude/cross-model-review.session.local.md` if present → PERSISTED state.
-   b. Else, scan recent conversation transcript for the most recent `[cmr-state: ...]` marker line written by a prior skill invocation in this session → EPHEMERAL state.
-   c. Else → NONE (no plugin activity yet in this project AND no in-context marker either).
+   b. Else → NONE (no plugin activity yet in this project, OR `.claude/` is not writable — v0.3.0 does not run review skills in non-persisted contexts; see step 6's NONE block).
 
 2.5. **Pre-upgrade chain regime detection.** Mirrors the skill bootstrap rule
-   (design §10). Runs in both PERSISTED and EPHEMERAL state — the
-   `[cmr-state: ...]` marker can carry `filed_issues` just like a state
-   file:
-   - State source has `filed_issues` field (even if `[]`) → `regime = new`.
-   - State source has NO `filed_issues` field → `regime = pre-upgrade`.
+   (design §10). Only applies to PERSISTED state:
+   - State file has `filed_issues` field (even if `[]`) → `regime = new`.
+   - State file has NO `filed_issues` field → `regime = pre-upgrade`.
    - NONE state → `regime` is undefined (no chain yet; nothing to display
      either way).
 
@@ -38,8 +35,7 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
 
 4. **Filed issues / pending decisions** (regime-dependent — pick exactly one):
 
-   - **regime = new:** for each entry in `state.filed_issues` (or the
-     `filed_issues` field of the in-context marker), fetch the title:
+   - **regime = new:** for each entry in `state.filed_issues`, fetch the title:
 
      ```bash
      gh issue view <number> --json title --jq .title
@@ -54,9 +50,9 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
    - **regime = pre-upgrade:** read per-chain
      `.claude/cross-model-review/decisions/<basename>.md` if exists,
      count entries with format `## decision-...`, and list each handle
-     with its one-line summary. (PERSISTED only — pre-upgrade chains in
-     EPHEMERAL mode surface decisions in chat per Section 6 of the
-     original design and have no decisions file to read.)
+     with its one-line summary.
+
+4.5. **In-flight Codex reviews.** Read `state.codex_reviews_in_progress` (v0.3.0+ field; absent in pre-upgrade chains). For each entry, compute elapsed time from `started_at` to now. Format the section in step 6's PERSISTED output below. If the field is absent or empty, omit the section.
 
 5. **Per-rule hooks check.** Enumerate the planned rule list and count
    how many are installed. Mirrors the per-rule install pattern from
@@ -87,9 +83,9 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
    ```
 
    The "(re-run /cross-model-setup …)" suffix only appears when N < M.
-   Used in both PERSISTED and EPHEMERAL output templates below.
+   Used in the PERSISTED output template below.
 
-6. Output the status block. Three formats based on step 2 outcome:
+6. Output the status block. Two formats based on step 2 outcome:
 
    **PERSISTED state with active chain:**
 
@@ -102,7 +98,7 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
 
    Mode:           INTERACTIVE | AUTONOMOUS  (per state.autonomous)
 
-   Codex thread:   <thread_id>  (project-scoped, durable until reset; primed at <time>)
+   Codex thread:   <thread_id>  (most-recently-completed chain; in-flight threads tracked below)
    Active chain:   <state.active_chain_artifact>
       Status:       ⏳ IN PROGRESS | ✅ COMPLETED (PR: <url>) | ⏸️ HALTED (<reason>)
       Last call:    <state.last_invocation>  (kind: <state.last_invocation_kind>)
@@ -113,6 +109,10 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       impl-review:    [same options]
 
    Skip flag:      NOT ARMED | ARMED  (next review trigger will be suppressed)
+
+   In-flight Codex reviews (if state.codex_reviews_in_progress is non-empty):
+      - <kind> on <chain_artifact> (branch <branch>, elapsed <Hh Mm Ss>, bg_id <bash_id>, status <in_progress|detached|stale_thread_error>)
+      - (repeat per entry)
 
    Hooks: <hooks_line from step 5>
 
@@ -132,61 +132,24 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       <handle>: <one-line summary>
    ```
 
-   **EPHEMERAL state (in-context marker found, no state file):**
-
-   ```
-   Cross-Model-Review Session Status
-   ─────────────────────────────────
-
-   State storage:  EPHEMERAL (in-conversation marker; no writable .claude/ directory)
-      State persists only for this conversation. No cross-session continuity.
-      Pre-upgrade chains: per-chain decisions files cannot be written; deferred
-      items surface in chat only. New-regime chains: filed_issues are tracked
-      in the marker and on GitHub (gh CLI works in ephemeral contexts).
-
-   Mode:           INTERACTIVE | AUTONOMOUS  (per marker)
-
-   Codex thread:   <thread_id>  (ephemeral; lives only in conversation context)
-   Active chain:   <marker.active_chain_artifact, if any>
-      Status:       ⏳ IN PROGRESS | ⏸️ HALTED (<reason>)  [COMPLETED rare in ephemeral]
-      Last call:    <marker.last_invocation>  (kind: <marker.last_invocation_kind>)
-
-   Approvals (active chain only):
-      [same format as PERSISTED, but hash-validation may be limited if
-       artifacts aren't readable]
-
-   Skip flag:      NOT ARMED | ARMED
-
-   Hooks: <hooks_line from step 5>
-
-   [Filed issues / Pending decisions block — regime-dependent, pick one:]
-
-   If regime = new (marker carries filed_issues field, even if []):
-
-   Filed issues (this chain):
-      #<num> (<kind>): <title from gh issue view>
-      #<num> (<kind>): <title from gh issue view>
-      ... (or "(none)" if marker.filed_issues is empty)
-
-   If regime = pre-upgrade (marker has no filed_issues field):
-
-   Pending decisions: surfaced in chat (no decisions file in ephemeral mode)
-   ```
-
-   **NONE (no state file AND no in-context marker — truly fresh):**
+   **NONE (no state file present):**
 
    ```
    Cross-Model-Review Session Status
    ─────────────────────────────────
 
    State storage:  NONE
-      No persisted state file AND no in-conversation marker. No cross-model-review
-      activity has occurred yet in this project / session.
+      No persisted state file present. Either no cross-model-review activity has
+      occurred yet in this project, OR `.claude/` is not writable.
 
-      In a writable project: frontmatter resume from docs/plans/ IS available for
-      the next review (auto-resume only when exactly one candidate exists).
-      In a read-only / projectless context: future activity will run in EPHEMERAL
-      mode automatically.
+      If `.claude/` is writable, frontmatter resume from docs/plans/ is available
+      for the next review (auto-resume when exactly one candidate exists).
+
+      If `.claude/` is NOT writable, invoking a cross-model-review skill here will
+      halt with a chat note explaining the persisted-mode requirement. v0.3.0 does
+      not run async Codex reviews in non-persisted (ephemeral) contexts. Either
+      run `/cross-model-setup` to initialize state in a writable project, or
+      invoke this plugin from a normal project context.
 
    Mode:           — (defaults to interactive on first stateful action)
 
