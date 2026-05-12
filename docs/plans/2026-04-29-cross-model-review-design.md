@@ -224,6 +224,8 @@ Both share the same Codex thread, so plan-review can reference the design discus
 
 ### 5.7 Universal priming (sent once per project, on first Codex call)
 
+In v0.3.0+, the priming is written into the prompt file that `codex exec` reads from stdin, not passed as an MCP `prompt` parameter (which is what v0.1/v0.2 did). The content is unchanged; only the transport differs.
+
 ```
 You are participating as a second model in a software design and review
 session conducted by another model (Claude). Throughout this session, Claude
@@ -276,17 +278,37 @@ say so explicitly and ask Claude to provide what you need.
 
 ### 5.8 Stale thread fallback
 
-If `mcp__codex__codex-reply` fails (thread not found, expired, rotated):
-1. Skill catches the error.
-2. Creates new thread via `mcp__codex__codex` with universal priming + compact recovery handoff describing what's recoverable (active chain, branch, last invocation kind, approval state from artifacts, pending decisions count).
-3. Captures new threadId, updates state.
-4. Posts chat note: previous thread couldn't be resumed; started fresh; Codex's memory of earlier discussions is gone but artifacts and approvals are intact.
+If `codex exec resume <thread_id>` fails (thread not found, expired, rotated):
 
-### 5.9 Codex MCP invocation
+**v0.1 / v0.2 behavior (MCP-based, retained for documentation):** The skill caught the error, created a new thread via `mcp__codex__codex` with universal priming + compact recovery handoff (active chain, branch, last invocation kind, approval state from artifacts, pending decisions count), updated state, posted chat note explaining the fallback.
 
-- `cwd`: project root via `git rev-parse --show-toplevel`
-- `sandbox`: `"read-only"` (Codex can read files, run grep/git/find; cannot write or run mutating commands)
-- Read-only is sufficient for static tracing (call graph walking, behavior flow analysis, claim verification). Dynamic tracing (running tests, instrumenting code) is out of scope for v0.1.
+**v0.3.0 behavior (async CLI, current):** Stale-thread detection happens in the on-bg-completion handler (each skill's "Response handling loop → On bg completion" subsection) via best-effort substring matching of `"Session not found for thread_id"` / `"thread not found"` in result/jsonl/stderr files. On detection: the slot is marked `status: "stale_thread_error"`, a chat note surfaces the failure with retry guidance, and `/cross-model-status` can explain. **Auto-recovery is NOT implemented in v0.3.0** — the user manually retries via `/cross-model-review-now <kind>` to create a fresh thread. This is a documented regression from v0.1/v0.2's auto-fallback; implementing async auto-recovery requires chaining multiple bg launches within one logical review and tracking the original chain across bg_id changes. Future refinement.
+
+### 5.9 Codex async CLI invocation (v0.3.0)
+
+v0.3.0 invokes Codex via `codex exec` CLI through Bash with `run_in_background: true`, instead of the synchronous `mcp__codex__codex` / `mcp__codex__codex-reply` MCP tools used in v0.1/v0.2. The reason is documented in the original investigation handoff (`docs/handoffs/2026-05-12-codex-impl-review-crash-fixes.md`) and the upstream issue [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480): Claude Code's UI watchdog kills the worker after ~10–12 min of synchronous MCP tool-call blocking, which is below what reasoning-heavy Codex calls realistically need at `xhigh` reasoning effort.
+
+**Invocation pattern (replaces v0.1/v0.2's MCP shape):**
+
+1. Skill generates a `launch_uuid` (UUID v4) and computes deterministic file paths for prompt, result, jsonl events, and stderr.
+2. Skill composes the prompt content into `prompt_file` — universal priming (on fresh thread) + `[MODE: <kind>]` + chain-boundary marker (if applicable) + artifact content + framing.
+3. Skill pre-writes a new entry to `state.codex_reviews_in_progress` with `bg_id: "pending"`, `status: "in_progress"`, `kind`, `branch`, `chain_artifact`, `attempted_thread_id`, file paths, and `started_at`. **Pre-writing BEFORE the bg launch narrows the bg-correlation race.** If the state write fails, the skill aborts the launch.
+4. Skill invokes Bash with `run_in_background: true`:
+   - Fresh thread: `codex exec --sandbox read-only -C <project> --json -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>`
+   - Continuation: `codex exec resume <thread_id> --sandbox read-only -C <project> --json -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>`
+5. Skill updates the slot's `bg_id` with the actual `bash_id` returned by Bash, posts a chat note, and ends the turn.
+6. On bg completion notification (subsequent turn): the on-bg-completion handler looks up the slot by `bash_id` (or falls back to scanning pending slots whose result_file exists, for the rare race case), reads the result file, parses findings, and routes them per the skill's normal flow. See § 5.8 for stale-thread error handling.
+
+**Multi-slot concurrency:** `state.codex_reviews_in_progress` is a list, supporting multiple in-flight reviews per project (across branches, kinds, or artifacts). Duplicate launches for the same `(chain_artifact, branch)` raw string-pair are rejected by `/cross-model-review-now` and auto-trigger dedup paths. Raw-key dedup is a v0.3.0 limitation; stem-matching is future refinement (see CHANGELOG).
+
+**Detach (no cancel):** `/cross-model-reset` marks in-flight slots `status: "detached"` rather than removing them. The bg jobs continue to disk completion; their eventual notifications surface a "detached completed" chat note. v0.3.0 has no cancel-and-kill mechanism.
+
+**Sandbox + config controls (unchanged from v0.1/v0.2's MCP shape):**
+- `cwd` (via `-C <dir>`): project root from `git rev-parse --show-toplevel`.
+- `sandbox` (via `--sandbox read-only`): Codex can read files, run grep/git/find; cannot write or run mutating commands.
+- Per-call config overrides (via `-c key=value`): same capability as MCP's `config` parameter (e.g., `-c model_reasoning_effort=medium` for plugin calls if needed in the future).
+
+**Projectless / read-only filesystems (no async support in v0.3.0):** The async pattern requires persistent breadcrumbs across turns, which depend on a writable `.claude/`. The earlier "EPHEMERAL mode" fallback documented in v0.1/v0.2 (in-transcript markers) is **explicitly halted at bootstrap** in v0.3.0 — invoking a review skill in such a context posts a chat note explaining the limitation and exits. Re-enabling ephemeral with marker-based async breadcrumbs is possible future work.
 
 ## 6. Trigger system
 
