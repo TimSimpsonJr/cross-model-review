@@ -1,11 +1,11 @@
 ---
 name: codex-impl-review
-description: Use immediately after subagent-driven-development completes its final code-reviewer step, before opening a PR or marking work complete. Reviews the diff against the approved plan via Codex MCP. Triggers on phrases like "all tasks complete", "ready to PR", "implementation complete", "subagent-driven-development finished".
+description: Use immediately after subagent-driven-development completes its final code-reviewer step, before opening a PR or marking work complete. Reviews the diff against the approved plan via Codex (async CLI). Triggers on phrases like "all tasks complete", "ready to PR", "implementation complete", "subagent-driven-development finished".
 ---
 
 # codex-impl-review
 
-Adversarial review of code diffs against the approved plan by Codex via MCP.
+Adversarial review of code diffs against the approved plan by Codex via async CLI (`codex exec` through Bash `run_in_background: true`).
 
 **Announce at start:** "Using codex-impl-review to invoke Codex review of the diff."
 
@@ -27,7 +27,7 @@ If `state.active_chain_artifact` is set, the plan to compare against is derived 
 
 ## Universal Codex priming
 
-The text below is the universal priming string. Send it verbatim to Codex on the first MCP call per project (the fresh-thread path in the **Codex MCP call** section). It establishes Codex's role across all modes this project will use.
+The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the **Codex async CLI call** section), written into the prompt file. It establishes Codex's role across all modes this project will use.
 
 ```
 You are participating as a second model in a software design and review
@@ -175,15 +175,9 @@ say so explicitly and ask Claude to provide what you need.
    - If SKIP → post chat note explaining why (heuristic outcome AND chain
      status), exit skill.
 
-8. **Duplicate-in-flight guard** (multi-slot concurrency). Look up the
-   current chain's `(chain_artifact, branch)` raw string-pair in
-   `state.codex_reviews_in_progress`. If an entry with `status: in_progress`
-   exists for this pair, **silently dedupe** (exit skill without launching
-   another review). Manual invocations via `/cross-model-review-now` surface
-   the dedup as a chat note — see that command for details. Raw-key dedup
-   (not stem-matched) is a v0.3.0 limitation; see CHANGELOG.
+8. (The duplicate-in-flight guard runs AFTER Chain update — see the end of that next section. Bootstrap exits here once TRIGGER/SKIP is resolved; the dedup check needs the post-chain-update `active_chain_artifact` to compare correctly, so it lives in Chain update.)
 
-## Chain update (compute before the MCP call)
+## Chain update (compute before the async CLI call)
 
 Bootstrap has exited with TRIGGER. Now apply the impl-review chain rules
 per design doc Section 9.2. First capture
@@ -220,6 +214,12 @@ chain. Otherwise `chain_just_changed = false`.
 Persist the updated state (write `.claude/cross-model-review.session.local.md`).
 The Codex async CLI call below reads `chain_just_changed` to decide whether
 to prepend the `[CHAIN-BOUNDARY] ...` marker to the prompt file.
+
+### Duplicate-in-flight guard (compute AFTER active_chain_artifact is set)
+
+Now that `active_chain_artifact` reflects this invocation's target chain (either preserved from a prior call or set anew via anchorless-impl initialization), look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4).
+
+Raw-key dedup (not stem-matched) is a v0.3.0 limitation; see CHANGELOG.
 
 ## Codex async CLI call
 
@@ -457,7 +457,7 @@ for filed in state.filed_issues:
 
 Why it matters: cluster is the durable identifier set at filing time;
 mid-loop title edits or rewordings on the issue won't break this match.
-The framing in the MCP call is the primary prevention; this filter is
+The framing in the prompt file (composed in the async CLI call) is the primary prevention; this filter is
 defensive insurance against the framing being ignored.
 
 Apply this filter BEFORE the routing logic in the Routing sub-section

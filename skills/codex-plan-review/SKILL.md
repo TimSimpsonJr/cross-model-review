@@ -1,11 +1,11 @@
 ---
 name: codex-plan-review
-description: Use immediately after a design doc is written to docs/plans/ before invoking writing-plans, OR immediately after writing-plans saves an implementation plan. Reviews the artifact adversarially via Codex MCP. Triggers on phrases like "design doc written", "design saved to docs/plans/", "plan complete", "plan saved to docs/plans/", "ready for implementation", "ready to write the plan".
+description: Use immediately after a design doc is written to docs/plans/ before invoking writing-plans, OR immediately after writing-plans saves an implementation plan. Reviews the artifact adversarially via Codex (async CLI). Triggers on phrases like "design doc written", "design saved to docs/plans/", "plan complete", "plan saved to docs/plans/", "ready for implementation", "ready to write the plan".
 ---
 
 # codex-plan-review
 
-Adversarial review of design docs and implementation plans by Codex via MCP. Same skill, two modes: `design-review` (after brainstorming writes a design doc, before writing-plans is invoked) and `plan-review` (after writing-plans saves an implementation plan, to check drift from the design).
+Adversarial review of design docs and implementation plans by Codex via async CLI (`codex exec` through Bash `run_in_background: true`). Same skill, two modes: `design-review` (after brainstorming writes a design doc, before writing-plans is invoked) and `plan-review` (after writing-plans saves an implementation plan, to check drift from the design).
 
 **Announce at start:** "Using codex-plan-review to invoke Codex review."
 
@@ -28,7 +28,7 @@ If invoked manually via `/cross-model-review-now <design|plan> [path]`:
 
 ## Universal Codex priming
 
-The text below is the universal priming string. Send it verbatim to Codex on the first MCP call per project (the fresh-thread path in the next section). It establishes Codex's role across all modes this project will use.
+The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the Codex async CLI call section), written into the prompt file. It establishes Codex's role across all modes this project will use.
 
 ```
 You are participating as a second model in a software design and review
@@ -176,18 +176,9 @@ say so explicitly and ask Claude to provide what you need.
    - If SKIP → post chat note explaining why (heuristic outcome AND chain
      status), exit skill.
 
-8. **Duplicate-in-flight guard** (multi-slot concurrency). Look up the
-   current chain's `(chain_artifact, branch)` raw string-pair in
-   `state.codex_reviews_in_progress`. If an entry with `status: in_progress`
-   exists for this pair, **silently dedupe** (exit skill without launching
-   another review). Manual invocations via `/cross-model-review-now` surface
-   the dedup as a chat note instead of silent exit — see that command for
-   details. Note the dedup is raw-key (not stem-matched); plan-review on
-   the design doc and impl-review on `branch:<branch>` are technically the
-   same logical chain but have different `chain_artifact` strings, so the
-   dedup misses them — documented limitation, see v0.3.0 CHANGELOG.
+8. (The duplicate-in-flight guard runs AFTER Chain update — see the end of that next section. Bootstrap exits here once TRIGGER/SKIP is resolved; the dedup check needs the post-chain-update `active_chain_artifact` to compare correctly, so it lives in Chain update.)
 
-## Chain update (compute before the MCP call)
+## Chain update (compute before the async CLI call)
 
 Bootstrap has exited with TRIGGER. Now compute the chain transition for
 this invocation per design doc Section 9.2. First capture
@@ -225,6 +216,12 @@ Apply the transition for this invocation's mode:
 Persist the updated state (write `.claude/cross-model-review.session.local.md`).
 The Codex async CLI call below reads `chain_just_changed` to decide whether
 to prepend the `[CHAIN-BOUNDARY] ...` marker to the prompt file.
+
+### Duplicate-in-flight guard (compute AFTER active_chain_artifact is set)
+
+Now that `active_chain_artifact` reflects this invocation's target chain, look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4).
+
+Note the dedup is raw-key (not stem-matched); plan-review on the design doc and impl-review on `branch:<branch>` are technically the same logical chain but have different `chain_artifact` strings, so the dedup misses them — documented limitation, see v0.3.0 CHANGELOG.
 
 ## Codex async CLI call
 
@@ -404,7 +401,7 @@ for filed in state.filed_issues:
 
 Why it matters: cluster is the durable identifier set at filing time;
 mid-loop title edits or rewordings on the issue won't break this match.
-The framing in the MCP call is the primary prevention; this filter is
+The framing in the prompt file (composed in the async CLI call) is the primary prevention; this filter is
 defensive insurance against the framing being ignored.
 
 Apply this filter BEFORE the routing logic in the Routing sub-section
@@ -445,7 +442,7 @@ Otherwise, for each finding (or cluster):
    design flaws, plan deviations, missing edge cases, ambiguous specs):
    - At `design-review` and `plan-review`, "substantive critique" means
      **revise the artifact** (edit the design doc or plan doc directly)
-     and loop back to "Codex MCP call" with revised content. `scope` is
+     and loop back to "Codex async CLI call" with revised content. `scope` is
      `n-a` here.
 
 Note: at design-review and plan-review gates, `autonomous-safe` issues
@@ -675,7 +672,7 @@ After every loop iteration AND on termination:
 
 ## Errors and edge cases
 
-- Codex MCP unavailable: post chat note. INTERACTIVE: continue without review (user's call). AUTONOMOUS: HALT (Section 9.6 of design doc).
+- Codex CLI unavailable (e.g., `which codex` fails or Bash launch errors): post chat note. INTERACTIVE: continue without review (user's call). AUTONOMOUS: HALT (Section 9.6 of design doc).
 - Plan has no `Files:` section: trigger anyway; let Codex flag the format issue.
 - User invokes `/cross-model-skip` mid-loop: not applicable; skip is consumed pre-bootstrap.
 - Codex returns garbage (unparseable response): retry once. Still bad → treat as Codex unavailable.
