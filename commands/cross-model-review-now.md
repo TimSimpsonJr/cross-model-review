@@ -48,15 +48,31 @@ Manually invoke a Codex review. Useful when auto-triggers misfire or when you wa
    - Default branch → ask / halt.
    - Branch-base undeterminable → halt with note.
 
-4. **Bypass duplicate-guard and skip:**
-   - Mark this invocation as `manual_invocation = true` so review skills' bootstrap skip the duplicate-guard.
-   - Do NOT consume `state.skip_next_review` — it stays armed for the next AUTO-trigger.
+4. **In-flight duplicate check (v0.3.0).** Before launching, scan `state.codex_reviews_in_progress` for an entry with the same raw `(chain_artifact, branch)` pair (any kind) AND `status: in_progress`. If found, REJECT with chat note:
 
-5. Invoke the appropriate skill with the resolved artifact:
+   ```
+   A `<existing-kind>` review for `<chain-artifact>` on branch `<branch>` is
+   already in progress (bg_id `<bash_id>`, started `<ts>`).
+
+   Same-chain reviews are sequential — wait for it to complete, or run
+   `/cross-model-reset` to detach (the bg job continues to disk completion
+   but the plugin stops tracking it; no cancel-and-kill in v0.3.0).
+   ```
+
+   Note: the dedup is raw `(chain_artifact, branch)` string-pair, NOT stem-matched. Edge case (documented limitation, see v0.3.0 CHANGELOG): plan-review on `docs/plans/foo-plan.md` and a concurrent `/cross-model-review-now impl` (which resolves to `branch:<branch>`) target the same logical chain but have different `chain_artifact` strings, so dedup misses the conflict. The user-visible failure mode is split continuity: two Codex threads for one logical chain. Stem-matching dedup is future refinement.
+
+   Reviews of DIFFERENT chain artifacts in the same project, or the same artifact on different branches, are legitimately concurrent and proceed in parallel.
+
+5. **Bypass duplicate-guard and skip:**
+   - Mark this invocation as `manual_invocation = true` so review skills' bootstrap skip the duplicate-trigger guard (the time-based one).
+   - Do NOT consume `state.skip_next_review` — it stays armed for the next AUTO-trigger.
+   - Note: the in-flight duplicate check in step 4 is NOT bypassed by manual invocation — two reviews for the same chain conflict regardless of trigger source.
+
+6. Invoke the appropriate skill with the resolved artifact:
    - `design` or `plan` → `codex-plan-review` with mode set accordingly
    - `impl` → `codex-impl-review`
 
-6. Output before invoking:
+7. Output before invoking:
 
    ```
    Manually invoking codex-{kind}-review on <artifact>.
