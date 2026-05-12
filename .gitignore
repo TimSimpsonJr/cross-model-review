@@ -26,7 +26,8 @@ build/
 # Claude Code IDE-local settings
 .claude/settings.local.json
 
-# Plugin runtime artifacts (created in target repos when this plugin runs)
-# Listed here for awareness — they will not appear in this plugin repo itself.
-# .claude/cross-model-review.session.local.md
-# .claude/cross-model-review/
+# Plugin runtime artifacts (created in any repo where this plugin runs,
+# including this one — we routinely run cross-model-review against its
+# own development to dogfood the chain).
+.claude/cross-model-review.session.local.md
+.claude/cross-model-review/
