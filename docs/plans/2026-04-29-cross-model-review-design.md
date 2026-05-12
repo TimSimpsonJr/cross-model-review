@@ -14,7 +14,7 @@
 
 ## 1. Goal
 
-Integrate Codex (OpenAI's coding model, available as MCP) into the Superpowers workflow as an adversarial reviewer at three lifecycle moments and as an opt-in brainstorming partner. Eliminate the manual copy-paste handoff currently required between Claude and Codex during design and review steps. Enable overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval for code-only decisions.
+Integrate Codex (OpenAI's coding model, invoked via the `codex` CLI in v0.3.0+; previously via MCP in v0.1/v0.2) into the Superpowers workflow as an adversarial reviewer at three lifecycle moments and as an opt-in brainstorming partner. Eliminate the manual copy-paste handoff currently required between Claude and Codex during design and review steps. Enable overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval for code-only decisions.
 
 The plugin layers on top of Superpowers (`brainstorming`, `writing-plans`, `subagent-driven-development`) without modifying upstream skills.
 
@@ -152,36 +152,62 @@ Explicit "off" beats scheduled "on" at every level.
 
 ### Projectless / read-only fallback
 
-In contexts without a writable `.claude/` directory: ephemeral in-session state only. Mechanism is implementation-detail (Claude maintains an in-context active-session marker). Frontmatter resume is gated on "no active-session signal at all," same contract as persisted mode.
+**v0.1 / v0.2 behavior (retired in v0.3.0):** in contexts without a writable `.claude/` directory, the plugin used ephemeral in-session state via an in-context `[cmr-state: ...]` active-session marker. Frontmatter resume was gated on "no active-session signal at all."
+
+**v0.3.0 behavior:** the async CLI invocation pattern requires persistent breadcrumbs across turns, which the in-transcript marker mechanism cannot reliably carry. v0.3.0 therefore **halts at bootstrap** in non-writable contexts — invoking any review skill in such a project posts a chat note explaining the requirement and exits. There is no MCP fallback path. See § 5.9's "Projectless / read-only filesystems" block for the canonical statement. Re-enabling ephemeral with marker-based async breadcrumbs is possible future work.
 
 ## 5. The three skills + ad-hoc
 
 ### 5.1 Shared patterns (review skills)
 
 ```
-1. Bootstrap: read state file (or ephemeral fallback)
+1. Bootstrap: read state file (HALT if .claude/ not writable — v0.3.0 has
+   no ephemeral fallback; see § 5.9 "Projectless / read-only" block)
 2. Check skip_next_review → if set, clear and exit
-3. Check duplicate-trigger guard:
+3. Check duplicate-trigger guard (time-based):
    if last_invocation_kind == this_kind
       AND (now - last_invocation) < 5 seconds
       AND not manual_invocation:
           exit early (duplicate)
-4. Init or resume codex_thread_id:
-   - First call in project: mcp__codex__codex with universal priming + content
-   - Subsequent calls: mcp__codex__codex-reply with threadId, bare content + mode tag
-5. If chain just changed: prefix content with [CHAIN-BOUNDARY] marker
-6. Receive Codex response; route per response-handling pattern
-7. Update last_invocation / last_invocation_kind
+4. Chain update: compute new active_chain_artifact
+5. Duplicate-in-flight guard: if state.codex_reviews_in_progress has an
+   entry with raw (active_chain_artifact, branch) match and
+   status: in_progress → silently dedupe (auto-trigger) OR surface chat
+   note (manual via /cross-model-review-now).
+6. Pre-generate launch_uuid + result/jsonl/stderr/prompt file paths.
+7. Compose prompt to prompt_file:
+   - Fresh thread: universal priming + [MODE: <kind>] + chain content
+   - Continuation: [CHAIN-BOUNDARY] marker if chain_just_changed +
+     [MODE: <kind>] + chain content
+8. Pre-write state slot (bg_id=pending) BEFORE Bash launch. Abort
+   if state write fails.
+9. Launch codex exec [resume <thread_id>] via Bash with
+   run_in_background: true; capture bash_id; update slot.bg_id.
+10. End turn with chat note. Wait for completion notification.
+11. On bg completion (next-turn handler): match slot by bg_id (or
+    scan pending slots if race), branch on status (in_progress /
+    detached / stale_thread_error), parse findings, route per
+    severity / cluster, loop or terminate.
 ```
 
-### 5.2 Brainstorm-partner bootstrap (different — no skip / no duplicate guard)
+### 5.2 Brainstorm-partner bootstrap (different — no skip / no duplicate-trigger guard)
 
 ```
-1. Bootstrap: read state file (or ephemeral fallback)
-2. Init or resume codex_thread_id (same as review)
-3. Send Claude's question with [MODE: brainstorm-partner] prefix
-4. Receive response; treat as user input to Claude's brainstorm flow
-5. Update last_invocation
+1. Bootstrap: HALT if .claude/ not writable (same rule as review skills)
+2. Load state. Pre-upgrade chain regime detection.
+3. No-op fallback: if state.codex_reviews_in_progress already has a
+   brainstorm-partner entry for this branch with status: in_progress,
+   exit (parent brainstorming hasn't paused for the prior stand-in yet).
+4. Pre-generate launch_uuid + file paths.
+5. Compose prompt: [MODE: brainstorm-partner] + Claude's question
+   (universal priming on first call).
+6. Pre-write state slot.
+7. Launch codex exec via Bash run_in_background: true; capture bash_id;
+   update slot.bg_id.
+8. End turn. Parent superpowers:brainstorming flow pauses at its turn
+   boundary waiting for "user input."
+9. On bg completion: read result, feed it to brainstorming as the
+   user's response. Remove slot.
 ```
 
 ### 5.3 `codex-plan-review` (handles design-review AND plan-review)
@@ -210,9 +236,9 @@ Both share the same Codex thread, so plan-review can reference the design discus
 
 ### 5.6 Ad-hoc consultation
 
-**Owner:** CLAUDE.md routing + direct MCP call. NOT a skill.
+**Owner:** CLAUDE.md routing + direct async CLI call (`codex exec` via Bash `run_in_background`). NOT a skill.
 
-**Trigger:** User says "ask codex about X" / "what does codex think" → Claude makes direct `mcp__codex__codex-reply` call with `[MODE: ad-hoc]` prefix.
+**Trigger:** User says "ask codex about X" / "what does codex think" → Claude composes a prompt file with `[MODE: ad-hoc]` + the question and launches `codex exec resume <state.codex_thread_id>` (or fresh `codex exec` with universal priming if no thread yet) via Bash with `run_in_background: true`, per the **Codex async CLI invocation** pattern in §5.9. On bg completion, Claude surfaces Codex's reply to the user.
 
 **Strictly one-shot:**
 - Shares session thread.
@@ -223,6 +249,8 @@ Both share the same Codex thread, so plan-review can reference the design discus
 - First ad-hoc creates state file (seeds session continuity).
 
 ### 5.7 Universal priming (sent once per project, on first Codex call)
+
+In v0.3.0+, the priming is written into the prompt file that `codex exec` reads from stdin, not passed as an MCP `prompt` parameter (which is what v0.1/v0.2 did). The content is unchanged; only the transport differs.
 
 ```
 You are participating as a second model in a software design and review
@@ -276,17 +304,37 @@ say so explicitly and ask Claude to provide what you need.
 
 ### 5.8 Stale thread fallback
 
-If `mcp__codex__codex-reply` fails (thread not found, expired, rotated):
-1. Skill catches the error.
-2. Creates new thread via `mcp__codex__codex` with universal priming + compact recovery handoff describing what's recoverable (active chain, branch, last invocation kind, approval state from artifacts, pending decisions count).
-3. Captures new threadId, updates state.
-4. Posts chat note: previous thread couldn't be resumed; started fresh; Codex's memory of earlier discussions is gone but artifacts and approvals are intact.
+If `codex exec resume <thread_id>` fails (thread not found, expired, rotated):
 
-### 5.9 Codex MCP invocation
+**v0.1 / v0.2 behavior (MCP-based, retained for documentation):** The skill caught the error, created a new thread via `mcp__codex__codex` with universal priming + compact recovery handoff (active chain, branch, last invocation kind, approval state from artifacts, pending decisions count), updated state, posted chat note explaining the fallback.
 
-- `cwd`: project root via `git rev-parse --show-toplevel`
-- `sandbox`: `"read-only"` (Codex can read files, run grep/git/find; cannot write or run mutating commands)
-- Read-only is sufficient for static tracing (call graph walking, behavior flow analysis, claim verification). Dynamic tracing (running tests, instrumenting code) is out of scope for v0.1.
+**v0.3.0 behavior (async CLI, current):** Stale-thread detection happens in the on-bg-completion handler (each skill's "Response handling loop → On bg completion" subsection) via best-effort substring matching of `"Session not found for thread_id"` / `"thread not found"` in result/jsonl/stderr files. On detection: the slot is marked `status: "stale_thread_error"`, a chat note surfaces the failure with retry guidance, and `/cross-model-status` can explain. **Auto-recovery is NOT implemented in v0.3.0** — the user manually retries via `/cross-model-review-now <kind>` to create a fresh thread. This is a documented regression from v0.1/v0.2's auto-fallback; implementing async auto-recovery requires chaining multiple bg launches within one logical review and tracking the original chain across bg_id changes. Future refinement.
+
+### 5.9 Codex async CLI invocation (v0.3.0)
+
+v0.3.0 invokes Codex via `codex exec` CLI through Bash with `run_in_background: true`, instead of the synchronous `mcp__codex__codex` / `mcp__codex__codex-reply` MCP tools used in v0.1/v0.2. The reason is documented in the original investigation handoff (`docs/handoffs/2026-05-12-codex-impl-review-crash-fixes.md`) and the upstream issue [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480): Claude Code's UI watchdog kills the worker after ~10–12 min of synchronous MCP tool-call blocking, which is below what reasoning-heavy Codex calls realistically need at `xhigh` reasoning effort.
+
+**Invocation pattern (replaces v0.1/v0.2's MCP shape):**
+
+1. Skill generates a `launch_uuid` (UUID v4) and computes deterministic file paths for prompt, result, jsonl events, and stderr.
+2. Skill composes the prompt content into `prompt_file` — universal priming (on fresh thread) + `[MODE: <kind>]` + chain-boundary marker (if applicable) + artifact content + framing.
+3. Skill pre-writes a new entry to `state.codex_reviews_in_progress` with `bg_id: "pending"`, `status: "in_progress"`, `kind`, `branch`, `chain_artifact`, `attempted_thread_id`, file paths, and `started_at`. **Pre-writing BEFORE the bg launch narrows the bg-correlation race.** If the state write fails, the skill aborts the launch.
+4. Skill invokes Bash with `run_in_background: true`:
+   - Fresh thread: `codex exec --sandbox read-only -C <project> --json -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>`
+   - Continuation: `codex exec resume <thread_id> --sandbox read-only -C <project> --json -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>`
+5. Skill updates the slot's `bg_id` with the actual `bash_id` returned by Bash, posts a chat note, and ends the turn.
+6. On bg completion notification (subsequent turn): the on-bg-completion handler looks up the slot by `bash_id` (or falls back to scanning pending slots whose result_file exists, for the rare race case), reads the result file, parses findings, and routes them per the skill's normal flow. See § 5.8 for stale-thread error handling.
+
+**Multi-slot concurrency:** `state.codex_reviews_in_progress` is a list, supporting multiple in-flight reviews per project (across branches, kinds, or artifacts). Duplicate launches for the same `(chain_artifact, branch)` raw string-pair are rejected by `/cross-model-review-now` and auto-trigger dedup paths. Raw-key dedup is a v0.3.0 limitation; stem-matching is future refinement (see CHANGELOG).
+
+**Detach (no cancel):** `/cross-model-reset` marks in-flight slots `status: "detached"` rather than removing them. The bg jobs continue to disk completion; their eventual notifications surface a "detached completed" chat note. v0.3.0 has no cancel-and-kill mechanism.
+
+**Sandbox + config controls (unchanged from v0.1/v0.2's MCP shape):**
+- `cwd` (via `-C <dir>`): project root from `git rev-parse --show-toplevel`.
+- `sandbox` (via `--sandbox read-only`): Codex can read files, run grep/git/find; cannot write or run mutating commands.
+- Per-call config overrides (via `-c key=value`): same capability as MCP's `config` parameter (e.g., `-c model_reasoning_effort=medium` for plugin calls if needed in the future).
+
+**Projectless / read-only filesystems (no async support in v0.3.0):** The async pattern requires persistent breadcrumbs across turns, which depend on a writable `.claude/`. The earlier "EPHEMERAL mode" fallback documented in v0.1/v0.2 (in-transcript markers) is **explicitly halted at bootstrap** in v0.3.0 — invoking a review skill in such a context posts a chat note explaining the limitation and exits. Re-enabling ephemeral with marker-based async breadcrumbs is possible future work.
 
 ## 6. Trigger system
 
@@ -310,7 +358,7 @@ If `mcp__codex__codex-reply` fails (thread not found, expired, rotated):
 | Skill description + hook both fire (double trigger) | Same-kind + 5-second window dedupe; second invocation exits early. |
 | Claude forgets to invoke (all three layers miss) | User invokes `/cross-model-review-now <kind>` manually. |
 | False positive (writing-plans for non-code plan) | Code-detection heuristic in skill body catches; exits with chat note. |
-| Codex MCP unavailable | Skill posts chat note; in interactive mode, continues without review; in autonomous mode during a review gate, **halts** (Section 9.6). |
+| Codex CLI unavailable (`which codex` fails, Bash launch errors, etc.) | Skill posts chat note; in interactive mode, continues without review; in autonomous mode during a review gate, **halts** (Section 9.6). |
 | User skipped, then asks why | `/cross-model-status` shows skip flag was honored. |
 | Skip + paired triggers (3.2a/3.2b) | Skip applies to whichever fires next; Claude announces what's skipped vs still armed. |
 
@@ -324,7 +372,7 @@ Seven commands. All bootstrap state on first stateful action. Status and setup a
 | `/cross-model-autonomous-off` | `state.autonomous = false` |
 | `/cross-model-skip` | `state.skip_next_review = true`. Announce what's armed. One-shot. |
 | `/cross-model-review-now <kind>` | Manually invoke named flow. `<kind>` ∈ {design, plan, impl}. Bypasses duplicate-guard; bypasses skip without consuming it. Requires unambiguous artifact target. |
-| `/cross-model-setup` | First-run install: verify Codex MCP, print/apply CLAUDE.md additions, idempotent. |
+| `/cross-model-setup` | First-run install: verify Codex CLI installation (`which codex`, version ≥ 0.125.0), print/apply CLAUDE.md additions, idempotent. |
 | `/cross-model-status` | Plain-language state report (Section 9.5). Read-only. |
 | `/cross-model-reset` | Write fresh-defaults state file. Frontmatter resume stays suppressed as long as the state file exists — including after this reset (the file remains, just with default values). The only path to re-enable frontmatter resume is **manual deletion of the state file**, which is rarely needed: typical users either let the existing state continue or invoke `/cross-model-reset` again to start a fresh chain in-place. Does not touch design/plan doc content; their `codex_thread_id` frontmatter persists as a fallback for *new* installs/projects without state files but won't be consulted while any state file exists locally. |
 
@@ -666,7 +714,7 @@ Natural-language intent mapping for the cross-model-review plugin:
 | "I'll take it from here" / "Tim's back" | `/cross-model-autonomous-off` + end any active codex-brainstorm-partner stand-in for the current brainstorm |
 | "skip codex on this" / "skip the review" | `/cross-model-skip` |
 | "let's brainstorm with codex" / "let codex weigh in" | Invoke `cross-model-review:codex-brainstorm-partner` |
-| "ask codex about <X>" / "what does codex think about <X>" | Direct `mcp__codex__codex-reply` (or `codex` if first call) with `[MODE: ad-hoc]` prefix; uses active session thread |
+| "ask codex about <X>" / "what does codex think about <X>" | Launch async ad-hoc consultation via `codex exec resume <state.codex_thread_id>` (or fresh `codex exec` if first call) with `[MODE: ad-hoc]` prefix; written to a prompt file and run via Bash `run_in_background: true` per §5.9 |
 | "review the plan with codex" / "have codex check the implementation" | `/cross-model-review-now <kind>` |
 | "show me codex status" / "what's codex doing" | `/cross-model-status` |
 | "reset codex" / "fresh codex thread" | `/cross-model-reset` |

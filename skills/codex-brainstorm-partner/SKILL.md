@@ -5,17 +5,19 @@ description: Use during brainstorming when the user has explicitly opted in to h
 
 # codex-brainstorm-partner
 
-Codex stands in for the user during a brainstorming flow. Routes Claude's brainstorming questions to Codex via MCP and feeds Codex's responses back to Claude as conversational input.
+Codex stands in for the user during a brainstorming flow. Routes Claude's brainstorming questions to Codex via async CLI (`codex exec` with Bash `run_in_background: true`) and feeds Codex's responses back to Claude as conversational input on the next turn.
 
-**Announce at start:** "Using codex-brainstorm-partner — Codex will stand in for the user this turn."
+**Announce at start:** "Using codex-brainstorm-partner — Codex will stand in for the user. Launching async; will resume brainstorming when Codex responds."
 
 **No priming for Claude.** Claude doesn't get any peer-review framing. The brainstorming flow proceeds normally; this skill operates between Claude asking a question and Claude reading "the user's response."
+
+**Integration caveat — depends on parent skill turn-boundary pauses.** This skill's async pattern works because `superpowers:brainstorming` pauses at turn boundaries to wait for "user input" between questions. brainstorm-partner launches a Codex bg job, ends the turn, and on the next turn (after bg completion notification) feeds Codex's response to brainstorming as if the user typed it. **If a future version of `superpowers:brainstorming` changes those semantics** (e.g., expects synchronous in-turn responses), brainstorm-partner will produce incorrect behavior and need revisiting. The no-op fallback in step 5 of Bootstrap is a defensive guard against the most obvious failure mode (double-launch) but does not catch all possible upstream regressions.
 
 **State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
 
 ## Universal Codex priming
 
-The text below is the universal priming string. Send it verbatim to Codex on the first MCP call per project (the fresh-thread path in the **Codex MCP call** section). It establishes Codex's role across all modes this project will use.
+The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the **Codex async CLI call** section), written into the prompt file. It establishes Codex's role across all modes this project will use.
 
 ```
 You are participating as a second model in a software design and review
@@ -93,131 +95,155 @@ If at any point you're missing critical context to give a good response,
 say so explicitly and ask Claude to provide what you need.
 ```
 
-## Bootstrap (DIFFERENT from review skills — no skip / no duplicate guard)
+## Bootstrap (DIFFERENT from review skills — no skip / no duplicate-trigger guard, but has halt-on-ephemeral + no-op fallback)
 
-Brainstorm-partner is opt-in and turn-based, so its bootstrap is much lighter than the review skills:
+Brainstorm-partner is opt-in and turn-based:
 
-1. Read `.claude/cross-model-review.session.local.md` (or use ephemeral fallback — look for the most recent `[cmr-state: ...]` line in transcript, or treat as fresh if absent). Any "write fresh state file" path below emits `filed_issues: []` and `context_limit_tokens: 200000` per the writer contract above.
-   - If absent and at least one design/plan doc with `codex_thread_id` exists in `docs/plans/` on the current branch, apply the frontmatter-resume disambiguation rule:
+1. **Detect storage mode and halt on ephemeral.** Check whether the working directory has `.git/` AND `.claude/` is writable.
+   - If yes: continue.
+   - Otherwise: **HALT.** Post chat note: *"This project's `.claude/` directory is not writable. v0.3.0 requires persisted state for async Codex stand-in. Brainstorming continues with Claude only for this question."* Exit skill. The parent brainstorming flow continues without Codex's stand-in input.
+
+2. **Read `.claude/cross-model-review.session.local.md`.** Any "write fresh state file" path below emits `filed_issues: []` and `context_limit_tokens: 200000` per the writer contract above.
+   - If the state file is absent, apply the frontmatter-resume disambiguation rule:
      - Search `docs/plans/` on the current branch for design/plan docs whose frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's most-recent commits.
-     - If exactly ONE candidate → attempt `mcp__codex__codex-reply` with that threadId. On success: write fresh state file with that thread_id and artifact path as `active_chain_artifact`. On failure (thread expired): fall through to fresh-thread path with recovery handoff per design doc Section 5.8.
-     - If ZERO candidates → write fresh state file with defaults; first MCP call this project will create a new thread.
+     - If exactly ONE candidate → set `state.codex_thread_id` to its frontmatter thread_id; the next CLI call will be a `codex exec resume` continuation (stale-thread detection in the bg-completion handler covers expired-thread cases).
+     - If ZERO candidates → write fresh state file with defaults; the first `codex exec` call this project makes will create a new thread.
      - If MULTIPLE candidates → write fresh state file with defaults; post chat note: "Multiple design/plan docs in `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact."
-2. **Pre-upgrade chain detection.** After loading state in step 1, classify
-   the chain regime:
-   - State file was just created fresh in step 1 (or in EPHEMERAL mode,
-     marker just initialized) → set `regime = new`. The fresh-state write
-     from step 1 already emitted `filed_issues: []` per the writer
-     contract (preamble, design §6.1).
-   - State file existed AND has the `filed_issues` field (even if []) →
-     set `regime = new`.
-   - State file existed AND has NO `filed_issues` field → set
-     `regime = pre-upgrade`. Do NOT add the field — its absence is the
-     durable marker.
 
-   In the review skills (`codex-plan-review`, `codex-impl-review`),
-   `regime` is consulted later in defer paths and PR-construction paths
-   to choose between issue-filing (regime=new) and decisions-file
-   (regime=pre-upgrade). For `codex-brainstorm-partner` specifically,
-   the regime detection above only feeds the writer contract (fresh
-   writes emit `filed_issues: []`); the response-handling defer path
-   below stays on v0.1 behavior regardless of regime. The design's
-   issue-filing extension was scoped to the three review gates only.
-3. **Do NOT check `skip_next_review`.** Skip is review-only.
-4. **Do NOT apply duplicate-trigger guard.** Each brainstorm turn is independent.
+3. **Pre-upgrade chain detection.** After loading state in step 2, classify the chain regime:
+   - State file was just created fresh in step 2 → set `regime = new`. The fresh-state write already emitted `filed_issues: []` per the writer contract.
+   - State file existed AND has the `filed_issues` field (even if []) → set `regime = new`.
+   - State file existed AND has NO `filed_issues` field → set `regime = pre-upgrade`. Do NOT add the field — its absence is the durable marker.
 
-(No `state.paused` check — that field is not part of the v0.1 schema; brainstorm-partner is gated only by user opt-in.)
+   For brainstorm-partner specifically, `regime` only feeds the writer contract (fresh writes emit `filed_issues: []`); the response-handling defer path stays on v0.1 behavior regardless of regime.
 
-## Codex MCP call
+4. **Do NOT check `skip_next_review`** (skip is review-only). **Do NOT apply duplicate-trigger guard** (each brainstorm turn is independent).
 
-If `state.codex_thread_id` is null:
+5. **No-op fallback (defensive guard).** Look up `state.codex_reviews_in_progress` for any entry with `kind: brainstorm-partner` AND `branch: <current branch>` AND `status: in_progress`. If one exists, the previous async stand-in launch has not yet completed — do NOT double-launch. Post chat note: *"Previous Codex stand-in launch for this brainstorm is still running (bg_id `<bash_id>`, started `<ts>`). Brainstorming continues with Claude only for this question, or wait for the previous response."* Exit skill. This guards against the most obvious failure mode where the parent brainstorming flow has not paused for the prior stand-in's response. It does NOT detect all possible upstream-skill regressions — see the integration caveat at the top of this skill.
 
-1. **Late-bound frontmatter resume check.** Before initiating a fresh
-   thread, look at the artifact this invocation is about to review:
-   - If the artifact is a design or plan doc with `codex_thread_id` in its
-     frontmatter → attempt to resume that thread first (try
-     `mcp__codex__codex-reply` with that threadId + bare content + mode
-     tag). On success: write that threadId into state, proceed as
-     continuation.
-   - If the artifact is a `branch:<branch>` anchor (anchorless impl-only)
-     OR has no frontmatter `codex_thread_id` → skip late-bound resume,
-     proceed to fresh-thread path.
+(No `state.paused` check — that field is not part of the v0.1 schema; brainstorm-partner is gated by user opt-in plus the no-op fallback above.)
 
-   This makes the manual recovery path work: when bootstrap left
-   `state.codex_thread_id` null because of ambiguous candidates, and the
-   user invokes `/cross-model-review-now <kind> <explicit-path>`, the MCP
-   layer reads that explicit artifact's frontmatter and resumes from it.
-   Same logic applies any time a review fires for an artifact whose
-   frontmatter has a thread_id but state doesn't.
+## Codex async CLI call
 
-2. **Fresh-thread path (no frontmatter resume available, or resume failed):**
-   - Invoke `mcp__codex__codex` with:
-     - `cwd`: project root (via `git rev-parse --show-toplevel`)
-     - `sandbox`: "read-only"
-     - `prompt`: the full universal priming text from the **Universal Codex priming** section above + "\n\n[MODE: brainstorm-partner]\n\n<artifact content>"
-   - If the late-bound resume in step 1 failed (thread expired), prepend
-     a recovery handoff to the priming:
-     "[RESUMING — previous Codex thread (id: <old-id>) could not be
-     resumed. Reconstructing context: active chain: <stem>, branch:
-     <branch>, last invocation kind: <kind>, approvals so far: <derived
-     from artifact frontmatter>, pending decisions: <count>. Previous
-     thread's discussion is unavailable. Treat current artifact content
-     as primary context.]"
-   - Capture `threadId` from response; write to `state.codex_thread_id`.
-   - For brainstorm-partner there typically is no doc artifact yet — the
-     brainstorm hasn't produced a design doc. The threadId is captured to
-     `state.codex_thread_id` only. When brainstorming later writes the
-     design doc and codex-plan-review fires, that skill will write the
-     same `state.codex_thread_id` to the new design doc's frontmatter.
+The skill launches Codex via Bash with `run_in_background: true`, ending the current turn while Codex thinks. On completion notification, the next turn (handled in **On bg completion** below) reads the result and feeds it to brainstorming as if it were the user's response.
 
-Else (state.codex_thread_id is set; continuation call):
+### Step 1: Pre-generate identifiers and file paths
 
-- `chain_just_changed` is essentially always `false` for brainstorm-partner
-  (this skill does not modify the active chain). Only prepend the
-  `[CHAIN-BOUNDARY]` marker if `state.active_chain_artifact` was just
-  modified by another skill earlier in the same Claude turn (uncommon).
-- Invoke `mcp__codex__codex-reply` with:
-  - `threadId`: `state.codex_thread_id`
-  - `prompt`: "[MODE: brainstorm-partner]\n\n<artifact content>"
-- If reply errors with thread-not-found / expired:
-  - Reset `state.codex_thread_id = null`
-  - Re-enter this section's first branch (now-null `state.codex_thread_id`
-    will trigger late-bound frontmatter check, then fresh-thread path).
-  - The recovery handoff text above will be included in the priming.
+Generate a `launch_uuid` (UUID v4). Compute file paths:
 
-For this skill, `<this-mode>` is `brainstorm-partner`. Content is Claude's question prefixed with brief context if needed:
-
+```text
+prompt_file = /tmp/cmr-<launch_uuid>-prompt.txt
+result_file = /tmp/cmr-<launch_uuid>-result.txt
+jsonl_file  = /tmp/cmr-<launch_uuid>-events.jsonl
+stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
 ```
+
+### Step 2: Compose the prompt and write it to `prompt_file`
+
+**If `state.codex_thread_id` is null** (fresh thread): write the full universal priming text + `[MODE: brainstorm-partner]` tag + Claude's question. Set `attempted_thread_id = null`.
+
+**Fresh-thread content:**
+
+```text
+<full universal priming text>
+
 [MODE: brainstorm-partner]
 
 <the question Claude just asked>
 ```
 
-If user has provided any "Tim note:" annotations in the session, append:
+**Continuation content** (`state.codex_thread_id` set): just the mode tag + question (priming was set on the first call). Set `attempted_thread_id = state.codex_thread_id`.
+
+```text
+[MODE: brainstorm-partner]
+
+<the question Claude just asked>
+```
+
+**`chain_just_changed`** is essentially always `false` for brainstorm-partner (this skill does not modify the active chain). Only prepend a `[CHAIN-BOUNDARY]` marker if `state.active_chain_artifact` was just modified by another skill earlier in the same Claude turn (uncommon).
+
+If user has provided any "Tim note:" annotations in the session, append before the question:
 
 ```
 Tim's recent annotations to consider:
 <list of recent Tim notes from chat history>
 ```
 
-## Response handling
+### Step 3: Pre-write the state slot (BEFORE bg launch)
 
-Codex's response IS the user's response, semantically. Claude reads it as conversational input and continues brainstorming.
+Append a new entry to `state.codex_reviews_in_progress`:
 
-If Codex responds with "this is a UI/UX call I shouldn't make for Tim — surface it: <question>":
-- Interactive mode: pause, post in chat with notification, wait for user.
-- Autonomous mode: log to per-chain decisions file with defensible
-  default; continue. (Existing v0.1 behavior — unchanged. The design's
-  issue-filing extension was scoped to the three review gates only;
-  brainstorm-partner does not run a review loop and stays on v0.1
-  behavior regardless of regime. The bootstrap regime-detection at
-  step 2 above informs the writer contract but does not gate this
-  defer path.)
+```yaml
+- launch_uuid: <uuid>
+  bg_id: "pending"
+  status: in_progress
+  kind: brainstorm-partner
+  branch: <git rev-parse --abbrev-ref HEAD>
+  chain_artifact: <state.active_chain_artifact or "brainstorm:<branch>">
+  attempted_thread_id: <thread_id or null>
+  result_file: /tmp/cmr-<uuid>-result.txt
+  jsonl_file:  /tmp/cmr-<uuid>-events.jsonl
+  stderr_file: /tmp/cmr-<uuid>-stderr.txt
+  started_at:  <ISO timestamp>
+```
 
-If Codex responds with "looks good, write the plan" or convergence signal:
-- Brainstorming converges naturally (this is `brainstorming` skill's flow; this skill just relays).
-- The hand-off to `writing-plans` happens via `brainstorming`'s checklist.
+Persist by writing the state file. **If the state write fails, abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash.
+
+### Step 4: Launch via Bash with `run_in_background: true`
+
+**Fresh thread** (attempted_thread_id null):
+```bash
+codex exec --sandbox read-only -C <project-toplevel> --json \
+  -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
+```
+
+**Continuation** (attempted_thread_id set):
+```bash
+codex exec resume <attempted_thread_id> --sandbox read-only -C <project-toplevel> --json \
+  -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
+```
+
+Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
+
+### Step 5: Update the slot with the captured `bg_id`
+
+Update the slot's `bg_id` from `"pending"` to the actual `bash_id`. Persist state.
+
+### Step 6: Post chat note and end the turn
+
+Post: *"Codex stand-in thinking about the brainstorming question (typical 1–5 min at `xhigh` reasoning for a single question). Will surface response when complete."*
+
+End the turn. The parent brainstorming flow stays paused at its turn boundary waiting for "the user's response" (which will arrive via Codex on a subsequent turn).
+
+## On bg completion (next-turn handling)
+
+When a Bash bg job's completion notification arrives in a future turn:
+
+1. **Look up the slot** in `state.codex_reviews_in_progress` by the notification's `bash_id`. If found, proceed to step 4.
+2. **Fallback for the launch race**: if no direct match, scan slots where `bg_id == "pending"` AND `result_file` exists on disk. If exactly one matches, use it.
+3. If still no match: this notification is for an unrelated bg job. Ignore.
+4. **Branch on `status`:**
+   - `status == "detached"` (user ran `/cross-model-reset` mid-stand-in): inspect result file; post a chat note per the four cases (non-empty / missing-or-empty / stale-thread / corrupt) per the pattern in `codex-plan-review`. Remove the slot. Brainstorming continues without this stand-in input (parent skill resumes when user provides actual input).
+   - `status == "in_progress"`: proceed to step 5.
+5. **Check for stale-thread error (best-effort).** Scan `result_file`, `jsonl_file`, `stderr_file` for `"Session not found for thread_id"` / `"thread not found"`. If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Brainstorming continues with Claude only for this question."* Set slot's `status: "stale_thread_error"`. Remove the slot. Do NOT auto-recover.
+6. **Read `result_file`** — Codex's reply, formatted as if it were the user's response.
+7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (fresh-thread case only) and persist to `state.codex_thread_id` if it was the first call.
+8. **Remove the slot** from `codex_reviews_in_progress`.
+9. **Feed Codex's reply to the brainstorming flow** as the "user's response" to the prior question. The parent `superpowers:brainstorming` skill picks up from its waiting state and continues with the next question.
+
+## Response handling (semantic content)
+
+Codex's response IS the user's response, semantically. The bg-completion handler feeds it to the parent brainstorming flow.
+
+Special signals to detect in the response:
+
+- **UI/UX surfacing** ("this is a UI/UX call I shouldn't make for Tim — surface it: <question>"):
+  - Interactive mode: pause, post in chat with notification, wait for user.
+  - Autonomous mode: log to per-chain decisions file with defensible default; continue with the default applied. (Existing v0.1 behavior — unchanged.)
+
+- **Convergence** ("looks good, write the plan" or similar):
+  - Brainstorming converges naturally — the parent `brainstorming` skill detects the convergence signal and hands off to `writing-plans` via its own checklist.
 
 ## Mid-brainstorm user takeover
 
@@ -234,4 +260,6 @@ After every invocation:
 
 ## Errors
 
-- Codex MCP unavailable: post chat note ("Codex unavailable; brainstorming continues with Claude only"); skill exits silently. NOT a halt scenario — brainstorm-partner is opt-in collaboration, not a gate.
+- **Codex CLI not on PATH** (caught at launch time via `which codex` if the skill body opts to check, or surfaced by Bash exit code on launch): post chat note *"Codex CLI not available; brainstorming continues with Claude only. Install via `npm install -g @openai/codex`."* Skill exits silently. NOT a halt scenario — brainstorm-partner is opt-in collaboration, not a gate.
+- **Bash launch failed** (non-zero exit on the Bash invocation itself): post chat note describing the failure; remove the pre-written slot from `state.codex_reviews_in_progress`; brainstorming continues with Claude only.
+- **Stale-thread error in bg result** (per step 5 of On bg completion): brainstorming continues with Claude only for the affected question.

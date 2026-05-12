@@ -1,6 +1,6 @@
 ---
 name: cross-model-setup
-description: First-run setup for the cross-model-review plugin. Verifies Codex MCP, prints CLAUDE.md additions, optionally applies them. Idempotent.
+description: First-run setup for the cross-model-review plugin. Verifies Codex CLI installation, prints CLAUDE.md additions, optionally applies them. Idempotent.
 allowed-tools: Read, Write, Edit, Bash
 ---
 
@@ -10,9 +10,11 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
 
 ## Steps
 
-1. **Verify Codex MCP availability.** Check whether `mcp__codex__codex` and `mcp__codex__codex-reply` tools are present in the current session. If absent:
-   - Output: "Codex MCP server is not configured. The cross-model-review plugin requires Codex MCP. Configure your MCP server (typically via `~/.claude/mcp_servers.json` or per-project `.mcp.json`) and re-run `/cross-model-setup`."
+1. **Verify Codex CLI installation.** Run `which codex` (or equivalent on Windows) and `codex --version`. If `which codex` returns non-zero OR the version is below `0.125.0`:
+   - Output: "Codex CLI not found on PATH (or version is below 0.125.0). The cross-model-review plugin v0.3.0+ uses the Codex CLI via async Bash invocation — the MCP server is no longer required. Install or upgrade via `npm install -g @openai/codex` and re-run `/cross-model-setup`."
    - Exit.
+
+   Note: prior plugin versions (v0.1, v0.2) required the Codex MCP server. v0.3.0+ uses the CLI directly to bypass Claude Code's UI watchdog (see [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480)). If you previously configured the MCP server, you can leave it configured — it's unused but not harmful — or remove its entry from `~/.claude/mcp_servers.json` / per-project `.mcp.json`.
 
 2. **Verify Superpowers plugin.** Check whether `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:subagent-driven-development` skills are available. If absent:
    - Output: "Superpowers plugin not detected. Install via `/plugin install superpowers@superpowers-marketplace`. Re-run `/cross-model-setup` afterward."
@@ -50,7 +52,7 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    | "I'll take it from here" / "Tim's back" | `/cross-model-autonomous-off` + end any active codex-brainstorm-partner stand-in for the current brainstorm |
    | "skip codex on this" / "skip the review" | `/cross-model-skip` |
    | "let's brainstorm with codex" / "let codex weigh in" | Invoke `cross-model-review:codex-brainstorm-partner` |
-   | "ask codex about <X>" / "what does codex think about <X>" | Direct `mcp__codex__codex-reply` (or `codex` if first call) with `[MODE: ad-hoc]` prefix; uses active session thread |
+   | "ask codex about <X>" / "what does codex think about <X>" | Launch async ad-hoc consultation via `codex exec resume <state.codex_thread_id>` (or fresh `codex exec` if first call) with `[MODE: ad-hoc]` prefix; written to a prompt file and run via Bash `run_in_background: true` per the **Codex async CLI call** pattern in the review skills |
    | "review the plan with codex" / "have codex check the implementation" | `/cross-model-review-now <kind>` |
    | "show me codex status" / "what's codex doing" | `/cross-model-status` |
    | "reset codex" / "fresh codex thread" | `/cross-model-reset` |
