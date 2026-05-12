@@ -107,39 +107,34 @@ say so explicitly and ask Claude to provide what you need.
 
 ## Bootstrap (do this first, every invocation)
 
-1. Detect storage mode:
-   - If working directory has `.git/` AND `.claude/` is writable: PERSISTED mode.
-   - If neither (read-only filesystem, projectless context): EPHEMERAL mode.
+1. **Detect storage mode and halt on ephemeral.** Check whether the working directory has `.git/` AND `.claude/` is writable.
+   - If yes: PERSISTED mode. Continue.
+   - Otherwise (read-only filesystem, projectless context, or any case where state cannot be written to disk): **HALT.** Post chat note: *"This project's `.claude/` directory is not writable. v0.3.0 of cross-model-review requires persisted state for async Codex reviews. Ensure `.claude/` is writable for this project, or invoke this plugin from a normal project context."* Exit skill. No marker-based async fallback exists in v0.3.0.
 
-2. Load state:
-   - PERSISTED: read `.claude/cross-model-review.session.local.md` if present.
-     If absent, check for frontmatter resume. (Any "write fresh state file" path
-     below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
-     writer contract above.)
-     - Search `docs/plans/` on the current branch for design/plan docs whose
-       frontmatter contains `codex_thread_id`.
-     - Filter to candidates within last 24h OR matching the branch's
-       most-recent commits.
-     - If exactly ONE candidate → attempt `mcp__codex__codex-reply` with that
-       threadId. On success: write fresh state file with that thread_id and
-       artifact path as `active_chain_artifact`. On failure (thread expired):
-       fall through to fresh-thread path with recovery handoff per design
-       doc Section 5.8.
-     - If ZERO candidates → write fresh state file with defaults; first MCP
-       call this project will create a new thread.
-     - If MULTIPLE candidates → write fresh state file with defaults; post
-       chat note: "Multiple design/plan docs in `docs/plans/` could match
-       this branch. Not auto-resuming. Use `/cross-model-review-now <kind>
-       <path>` to manually resume from a specific artifact."
-   - EPHEMERAL: read in-conversation state marker (look for the most recent
-     `[cmr-state: ...]` line in transcript, or treat as fresh if absent).
-     Do NOT attempt to write a state file.
+2. Load state from `.claude/cross-model-review.session.local.md` if present.
+   If absent, check for frontmatter resume. (Any "write fresh state file" path
+   below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
+   writer contract above.)
+   - Search `docs/plans/` on the current branch for design/plan docs whose
+     frontmatter contains `codex_thread_id`.
+   - Filter to candidates within last 24h OR matching the branch's
+     most-recent commits.
+   - If exactly ONE candidate → set `state.codex_thread_id` to its frontmatter
+     thread_id and `state.active_chain_artifact` to its path; the next CLI
+     invocation will be a `codex exec resume` continuation, which detects
+     thread expiry via the stale-thread check (Codex async CLI call section
+     below). Write the fresh state file.
+   - If ZERO candidates → write fresh state file with defaults; the first
+     `codex exec` call this project makes will create a new thread.
+   - If MULTIPLE candidates → write fresh state file with defaults; post
+     chat note: "Multiple design/plan docs in `docs/plans/` could match
+     this branch. Not auto-resuming. Use `/cross-model-review-now <kind>
+     <path>` to manually resume from a specific artifact."
 
 2.5. **Pre-upgrade chain detection.** After loading state in step 2, classify
    the chain regime:
-   - State file was just created fresh in step 2 (or in EPHEMERAL mode,
-     marker just initialized) → set `regime = new`. The fresh-state write
-     from step 2 already emitted `filed_issues: []` per the writer
+   - State file was just created fresh in step 2 → set `regime = new`. The
+     fresh-state write already emitted `filed_issues: []` per the writer
      contract (preamble, design §6.1).
    - State file existed AND has the `filed_issues` field (even if []) →
      set `regime = new`.
@@ -151,9 +146,12 @@ say so explicitly and ask Claude to provide what you need.
    and PR-construction paths (Section 5.6 of design doc) to choose
    between issue-filing (regime=new) and decisions-file (regime=pre-upgrade).
 
-3. If `state.skip_next_review == true`: clear flag (write state file in
-   PERSISTED mode; update in-context marker in EPHEMERAL mode), post chat
-   note ("Codex review skipped per /cross-model-skip"), exit skill.
+3. If `state.skip_next_review == true`: clear flag (write state file), post
+   chat note ("Codex review skipped per /cross-model-skip"), exit skill.
+
+   Note: `/cross-model-skip` queues a skip for the NEXT review trigger; it
+   does NOT cancel any review currently in `state.codex_reviews_in_progress`.
+   To detach from an in-flight review, use `/cross-model-reset`.
 
 4. Duplicate-trigger guard: if `state.last_invocation_kind == this_kind`
    AND `(now - state.last_invocation) < 5 seconds` AND not manually
@@ -173,9 +171,17 @@ say so explicitly and ask Claude to provide what you need.
    - Otherwise, the heuristic result stands.
 
 7. Now act on the (possibly overridden) result:
-   - If TRIGGER → continue to the Chain update section, then the Codex MCP call.
+   - If TRIGGER → continue to the Chain update section, then the Codex async CLI call.
    - If SKIP → post chat note explaining why (heuristic outcome AND chain
      status), exit skill.
+
+8. **Duplicate-in-flight guard** (multi-slot concurrency). Look up the
+   current chain's `(chain_artifact, branch)` raw string-pair in
+   `state.codex_reviews_in_progress`. If an entry with `status: in_progress`
+   exists for this pair, **silently dedupe** (exit skill without launching
+   another review). Manual invocations via `/cross-model-review-now` surface
+   the dedup as a chat note — see that command for details. Raw-key dedup
+   (not stem-matched) is a v0.3.0 limitation; see CHANGELOG.
 
 ## Chain update (compute before the MCP call)
 
@@ -211,71 +217,63 @@ clearing fired and was followed by anchorless-impl initialization (i.e.,
 OR when anchorless-impl initialization fired against a previously-null
 chain. Otherwise `chain_just_changed = false`.
 
-Persist the updated state (PERSISTED mode: write
-`.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
-the in-context `[cmr-state: ...]` marker). The Codex MCP call below
-reads `chain_just_changed` to decide whether to prepend the
-`[CHAIN-BOUNDARY] ...` marker.
+Persist the updated state (write `.claude/cross-model-review.session.local.md`).
+The Codex async CLI call below reads `chain_just_changed` to decide whether
+to prepend the `[CHAIN-BOUNDARY] ...` marker to the prompt file.
 
-## Codex MCP call
+## Codex async CLI call
 
-If `state.codex_thread_id` is null:
+The skill launches Codex via Bash with `run_in_background: true`, ending
+the current turn while Codex works. On completion notification, a follow-up
+turn (handled in **Response handling loop → On bg completion**) reads the
+result and routes findings.
 
-1. **Late-bound frontmatter resume check.** Before initiating a fresh
-   thread, look at the artifact this invocation is about to review:
-   - If the artifact is a design or plan doc with `codex_thread_id` in its
-     frontmatter → attempt to resume that thread first (try
-     `mcp__codex__codex-reply` with that threadId + bare content + mode
-     tag). On success: write that threadId into state, proceed as
-     continuation.
-   - If the artifact is a `branch:<branch>` anchor (anchorless impl-only)
-     OR has no frontmatter `codex_thread_id` → skip late-bound resume,
-     proceed to fresh-thread path.
+### Step 1: Pre-generate identifiers and file paths
 
-   This makes the manual recovery path work: when bootstrap left
-   `state.codex_thread_id` null because of ambiguous candidates, and the
-   user invokes `/cross-model-review-now <kind> <explicit-path>`, the MCP
-   layer reads that explicit artifact's frontmatter and resumes from it.
-   Same logic applies any time a review fires for an artifact whose
-   frontmatter has a thread_id but state doesn't.
+Generate a `launch_uuid` (UUID v4, e.g., via `python -c "import uuid; print(uuid.uuid4())"`).
+Compute deterministic file paths from it:
 
-2. **Fresh-thread path (no frontmatter resume available, or resume failed):**
-   - Invoke `mcp__codex__codex` with:
-     - `cwd`: project root (via `git rev-parse --show-toplevel`)
-     - `sandbox`: "read-only"
-     - `prompt`: the full universal priming text from the **Universal Codex priming** section above + "\n\n[MODE: impl-review]\n\n<artifact content>"
-   - If the late-bound resume in step 1 failed (thread expired), prepend
-     a recovery handoff to the priming:
-     "[RESUMING — previous Codex thread (id: <old-id>) could not be
-     resumed. Reconstructing context: active chain: <stem>, branch:
-     <branch>, last invocation kind: <kind>, approvals so far: <derived
-     from artifact frontmatter>, pending decisions: <count>. Previous
-     thread's discussion is unavailable. Treat current artifact content
-     as primary context.]"
-   - Capture `threadId` from response; write to `state.codex_thread_id`.
-   - For impl-review specifically, there is no design/plan artifact in
-     this invocation — the threadId is captured to `state.codex_thread_id`
-     only. If a chain has a plan doc, future plan-review-now or
-     design-review-now invocations on that doc will pick up the threadId
-     from state and persist it to the doc's frontmatter at that point.
+```text
+prompt_file = /tmp/cmr-<launch_uuid>-prompt.txt
+result_file = /tmp/cmr-<launch_uuid>-result.txt
+jsonl_file  = /tmp/cmr-<launch_uuid>-events.jsonl
+stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
+```
 
-Else (state.codex_thread_id is set; continuation call):
+### Step 2: Compose the prompt and write it to `prompt_file`
 
-- If chain just changed (active_chain_artifact updated this invocation),
-  prepend "[CHAIN-BOUNDARY] starting new task: <stem>; previous task: <old-stem>\n\n" to content.
-- Invoke `mcp__codex__codex-reply` with:
-  - `threadId`: `state.codex_thread_id`
-  - `prompt`: "[MODE: impl-review]\n\n<artifact content>"
-- If reply errors with thread-not-found / expired:
-  - Reset `state.codex_thread_id = null`
-  - Re-enter this section's first branch (now-null state.codex_thread_id
-    will trigger late-bound frontmatter check, then fresh-thread path).
-  - The recovery handoff text above will be included in the priming.
+**If `state.codex_thread_id` is null** (fresh thread):
+- Late-bound frontmatter resume check: look at the artifact's frontmatter (if a plan doc exists in the chain). If `codex_thread_id` is set, use the continuation path with `attempted_thread_id = <that thread_id>`. Otherwise (no plan doc OR no thread_id OR anchorless `branch:<branch>` anchor), use the true-fresh path.
 
-For this skill, `<this-mode>` is `impl-review`. Content includes:
-- The plan content (full text of plan doc, if chain has one).
-- The diff (full `git diff <branch-base>..HEAD` output).
-- Brief framing line: "Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming."
+**True-fresh content:**
+
+```text
+<full universal priming text from the Universal Codex priming section>
+
+[MODE: impl-review]
+
+<plan content (full text of plan doc, if chain has one)>
+
+<diff content (full `git diff <branch-base>..HEAD` output)>
+
+Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+```
+
+**Continuation content (`state.codex_thread_id` set or late-bound resume):**
+
+```text
+[CHAIN-BOUNDARY] starting new task: <stem>; previous task: <old-stem>   ← only if chain_just_changed
+
+[MODE: impl-review]
+
+<plan content>
+
+<diff content>
+
+Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+```
+
+Set `attempted_thread_id = state.codex_thread_id` (or the late-bound frontmatter thread_id) for continuation; `null` for true-fresh.
 
 **Re-flag prevention framing.** If `state.filed_issues` is non-empty,
 prepend to the artifact content (after the `[MODE: ...]` tag and any
@@ -284,12 +282,55 @@ prepend to the artifact content (after the `[MODE: ...]` tag and any
 > Already filed as issues in this chain (do not re-flag): cluster=<name>
 > issue #<number>, cluster=<name> issue #<number>, ...
 
-Cluster is the durable identifier — issue titles can be edited but
-cluster names are set at filing time and do not change. The list comes
-from `state.filed_issues` (Section 6.1 of the autonomous-issue-filing
-design doc); read each entry's `cluster` and `number` fields.
+Cluster is the durable identifier. Read each entry's `cluster` and `number` fields from `state.filed_issues` (Section 6.1 of the autonomous-issue-filing design doc). If `state.filed_issues` is empty, omit the framing line entirely.
 
-If `state.filed_issues` is empty, omit the framing line entirely.
+### Step 3: Pre-write the state slot (BEFORE bg launch)
+
+Append a new entry to `state.codex_reviews_in_progress`:
+
+```yaml
+- launch_uuid: <uuid>
+  bg_id: "pending"
+  status: in_progress
+  kind: impl-review
+  branch: <git rev-parse --abbrev-ref HEAD>
+  chain_artifact: <plan-doc-path or "branch:<branch>">
+  attempted_thread_id: <thread_id or null>
+  result_file: /tmp/cmr-<uuid>-result.txt
+  jsonl_file:  /tmp/cmr-<uuid>-events.jsonl
+  stderr_file: /tmp/cmr-<uuid>-stderr.txt
+  started_at:  <ISO timestamp>
+```
+
+Persist by writing the state file. **If the state write fails, abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash.
+
+### Step 4: Launch via Bash with `run_in_background: true`
+
+**Fresh thread** (attempted_thread_id null):
+```bash
+codex exec --sandbox read-only -C <project-toplevel> --json \
+  -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
+```
+
+**Continuation** (attempted_thread_id set):
+```bash
+codex exec resume <attempted_thread_id> --sandbox read-only -C <project-toplevel> --json \
+  -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
+```
+
+Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
+
+### Step 5: Update the slot with the captured `bg_id`
+
+Update the slot's `bg_id` from `"pending"` to the actual `bash_id`. Persist state.
+
+If the bg job completed before this update committed, the on-completion handler falls back to scanning slots with `bg_id == "pending"` whose `result_file` exists on disk.
+
+### Step 6: Post chat note and end the turn
+
+Post: *"Codex impl-review running in the background (typical 5–15 min at `xhigh` reasoning). I'll surface findings when the background job completes."*
+
+End the turn.
 
 ## Context-budget probe (impl-review only)
 
@@ -359,6 +400,29 @@ collapse. It does NOT account for:
 Acceptable for v1; a more accurate probe is a v0.2 candidate.
 
 ## Response handling loop
+
+### On bg completion (next-turn handling)
+
+When a Bash bg job's completion notification arrives in a future turn (after this skill has launched a Codex async CLI call and ended its turn), the recovery flow below picks up the result:
+
+1. **Look up the slot** in `state.codex_reviews_in_progress` by the notification's `bash_id`. If found, proceed to step 4.
+2. **Fallback for the launch race**: if no direct match, scan slots where `bg_id == "pending"` AND `result_file` exists on disk. If exactly one matches, use it. If multiple match, choose the oldest by `started_at`. (Imperfect when multiple races coincide; acceptable for v0.3.0.)
+3. If still no match: this notification is for an unrelated bg job. Ignore.
+4. **Branch on `status`:**
+   - `status == "detached"` (user ran `/cross-model-reset` mid-review): inspect the result file's state and surface a chat note per the four cases below, then remove the slot. Do NOT route findings.
+     - **Non-empty result + no stale-thread markers**: *"Detached impl-review for `<chain-artifact>` completed; result at `<result_file>`. Findings NOT routed — review manually if useful."*
+     - **Result missing or empty**: *"Detached impl-review for `<chain-artifact>` ended with no usable result. See stderr at `<stderr_file>`."*
+     - **Stale-thread error in jsonl/stderr**: *"Detached impl-review for `<chain-artifact>` failed: Codex thread `<attempted_thread_id>` expired. No action needed."*
+     - **Result file non-empty but unparseable as findings**: *"Detached impl-review for `<chain-artifact>` completed with corrupt output at `<result_file>`. See stderr at `<stderr_file>`."*
+   - `status == "in_progress"`: proceed to step 5.
+5. **Check for stale-thread error (best-effort).** Scan `result_file`, `jsonl_file`, and `stderr_file` via allowlisted substring matching for patterns Codex emits when `codex exec resume` fails — currently observed: `"Session not found for thread_id"` and `"thread not found"`. (Treat as fuzzy signal subject to drift across Codex releases.) If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Start a fresh review with `/cross-model-review-now impl` (the plugin will create a new thread)."* Set slot's `status: "stale_thread_error"`. Do NOT auto-recover in v0.3.0. If neither pattern matches but result is empty/corrupt, fall through to generic failure handling.
+6. **Read `result_file`** — Codex's final structured review.
+7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (only present on fresh-thread calls; on resume calls thread_id equals `attempted_thread_id`).
+8. **Persist `thread_id`** to `state.codex_thread_id` if this was the first review for the chain. (impl-review has no artifact frontmatter to update.) Existing singleton fields retain their "most-recently-completed" semantics.
+9. **Remove the slot** from `codex_reviews_in_progress`.
+10. **Parse findings** per the tag-line spec below.
+11. **Route findings** per the routing logic below (severity / scope / cluster routing; entry-check for user-input items).
+12. **If the loop continues** (revisions dispatched, Codex didn't approve), the next iteration is another async-CLI call via the **Codex async CLI call** section above.
 
 ### Tag-line parser
 
@@ -596,9 +660,8 @@ rm -f "$body_file"
 
    On success, append
    `{number: $issue_number, cluster: "<cluster-name>", kind: "<label>"}`
-   to `state.filed_issues` and persist state (PERSISTED mode: write
-   `.claude/cross-model-review.session.local.md`; EPHEMERAL mode: update
-   the in-context `[cmr-state: ...]` marker).
+   to `state.filed_issues` and persist state (write
+   `.claude/cross-model-review.session.local.md`).
 
    If `gh issue create` itself fails (non-zero exit, OR exit zero but
    stdout is empty / does not contain a recognizable issues URL), surface
