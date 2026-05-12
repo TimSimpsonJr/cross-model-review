@@ -40,7 +40,9 @@ Suppress the next Codex review trigger of any kind. One-shot.
    Skip flag clears automatically after one review trigger fires-or-skips.
    ```
 
-5. The flag is consumed when:
+5. **Does NOT cancel in-flight reviews (v0.3.0).** `/cross-model-skip` queues a skip for the NEXT review trigger; it does NOT cancel any review currently in `state.codex_reviews_in_progress`. v0.3.0 has no cancel-and-kill mechanism — codex.exe processes continue until they finish naturally. To stop tracking an in-flight review (the bg job continues to disk completion but the plugin detaches), use `/cross-model-reset`.
+
+6. The flag is consumed when:
    - Any review skill bootstraps and finds it set (Block B step 2): clear flag, exit skill, post "Codex review skipped per /cross-model-skip" chat note.
    - User invokes `/cross-model-skip` again with the flag already set: refresh the announcement (no double-skip).
    - `/cross-model-reset` invoked: cleared with all other state.
