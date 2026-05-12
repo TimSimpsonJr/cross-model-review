@@ -3,7 +3,7 @@
 ## Stack
 
 - Claude Code plugin (markdown-driven, no runtime code)
-- Targets Codex MCP (`mcp__codex__codex` / `mcp__codex__codex-reply`)
+- Targets Codex CLI (`codex exec` / `codex exec resume` via Bash `run_in_background: true`); MCP-based invocation retired in v0.3.0
 - Layers on Superpowers (`brainstorming`, `writing-plans`, `subagent-driven-development`)
 
 ## Structure
