@@ -27,11 +27,16 @@ cross-model-review/
 │   └── cross-model-reset.md                       # fresh chain in this project
 ├── docs/
 │   ├── plans/
-│   │   ├── 2026-04-29-cross-model-review-design.md      # original v0.1 design doc
-│   │   ├── 2026-04-29-cross-model-review-plan.md        # v0.1 implementation plan
-│   │   └── 2026-05-08-autonomous-issue-filing-design.md # v0.2 design doc (issue filing)
+│   │   ├── 2026-04-29-cross-model-review-design.md       # original v0.1 design doc
+│   │   ├── 2026-04-29-cross-model-review-plan.md         # v0.1 implementation plan
+│   │   ├── 2026-05-08-autonomous-issue-filing-design.md  # v0.2 design doc (issue filing)
+│   │   ├── 2026-05-08-autonomous-issue-filing-plan.md    # v0.2 implementation plan
+│   │   ├── 2026-05-12-codex-cli-async-invocation-plan.md # v0.3.0 async-CLI migration plan
+│   │   ├── 2026-05-28-codex-cli-compat-fixes-design.md   # v0.3.1 design (0.125.0 compat: #4/#5/#6)
+│   │   └── 2026-05-28-codex-cli-compat-fixes-plan.md     # v0.3.1 implementation plan
 │   └── handoffs/
-│       └── 2026-04-29-cross-model-review-sdd-handoff.md  # SDD kickoff handoff for fresh session
+│       ├── 2026-04-29-cross-model-review-sdd-handoff.md  # SDD kickoff handoff for fresh session
+│       └── 2026-05-12-codex-impl-review-crash-fixes.md   # investigation handoff (impl-review crashes)
 ├── scripts/
 │   └── bulk-create-labels.sh                      # one-shot label creation across owned repos (v0.2 §7.2)
 ├── README.md                                      # install + usage + privacy note
