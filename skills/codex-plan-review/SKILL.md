@@ -28,7 +28,7 @@ If invoked manually via `/cross-model-review-now <design|plan> [path]`:
 
 ## Universal Codex priming
 
-The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the Codex async CLI call section), written into the prompt file. It establishes Codex's role across all modes this project will use.
+The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the **Codex async CLI call** section), written into the prompt file. It establishes Codex's role across all modes this project will use.
 
 ```
 You are participating as a second model in a software design and review
