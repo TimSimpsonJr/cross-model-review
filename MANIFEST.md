@@ -3,7 +3,7 @@
 ## Stack
 
 - Claude Code plugin (markdown-driven, no runtime code)
-- Targets Codex CLI (`codex exec` / `codex exec resume` via Bash `run_in_background: true`); MCP-based invocation retired in v0.3.0
+- Targets Codex CLI (`codex exec` / `codex exec resume` via Bash `run_in_background: true`); MCP-based invocation retired in v0.3.0. Fresh calls use `--sandbox read-only -C <top>`; resume calls (0.125.0 dropped those flags) use `cd <top> && ... -c sandbox_mode="read-only"`.
 - Layers on Superpowers (`brainstorming`, `writing-plans`, `subagent-driven-development`)
 
 ## Structure
@@ -53,3 +53,4 @@ cross-model-review/
 - **Hooks are advisory-only**: hookify-emitted rules never mutate state — they only inject reminder prompts when transcript patterns match. Skip-flag respect lives inside the prompt body itself (soft enforcement: the hookify message tells the model to honor the skip flag, but doesn't itself check filesystem state). Skill bodies and CLAUDE.md are the load-bearing layers.
 - **Issue-filing helper duplicated across two skills**: `skills/codex-plan-review/SKILL.md` and `skills/codex-impl-review/SKILL.md` carry byte-identical `## Issue filing` sections per the no-shared-prompts/ architecture. Verified by `diff` after each edit. v0.2 added this section.
 - **Hookify rule list duplicated across setup and status**: `commands/cross-model-setup.md` step 8 and `commands/cross-model-status.md` step 5 both enumerate the planned hookify rule files. Cross-reference notes in both files remind maintainers to update in lockstep when rules are added.
+- **Priming string and launch block are lockstep-duplicated across all three review skills** (`codex-plan-review`, `codex-impl-review`, `codex-brainstorm-partner`) and must be edited together and verified by `diff` — same discipline as the issue-filing helper. The on-bg-completion handler is parallel-but-not-identical across the three (plan/impl differ in chat-note wording; brainstorm-partner is a shorter variant), so handler edits are applied per-skill.
