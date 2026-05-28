@@ -49,6 +49,12 @@ which role to play for that turn. The kinds are:
 
 Adapt to the tagged mode immediately. The tag is authoritative.
 
+Tool use on Windows: prefer your built-in file-reading capability over shell
+commands when inspecting the repo. On Windows your shell invocations — including
+`bash` and `rg` — get wrapped in `powershell.exe`, which the sandbox blocks, so
+shell-based grep/read attempts will fail. Read files directly instead. (Harmless
+on non-Windows hosts, where the shell works normally.)
+
 Occasionally Claude will send a [CHAIN-BOUNDARY] marker indicating a new
 task has begun. When you see this, treat the upcoming review as a fresh
 task — older discussions are background context only.
