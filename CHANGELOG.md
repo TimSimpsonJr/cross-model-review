@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1 — 2026-05-28
+
+### Fixed
+- **#4 — `codex exec resume` invocation updated for Codex CLI 0.125.0.** The `resume` subcommand dropped `--sandbox` and `-C`; the continuation path now does `cd <project-toplevel> && codex exec resume <id> -c sandbox_mode="read-only" ...`. The fresh-thread path keeps the first-class `--sandbox`/`-C` flags (they fail loud if the CLI shifts again). Round 2+ of review chains works again.
+- **#6 — rollout-recording errors no longer misclassified as expired threads.** The on-bg-completion handler now decides success by positive result evidence first; the stale-thread substring scan runs only when the result is empty/corrupt. A co-occurring `failed to record rollout items` surfaces a soft warning instead of a false "thread expired". Supersedes the caveat noted in 0.3.0 about best-effort substring matching producing false positives.
+
+### Changed
+- **#5 — universal priming nudges Codex toward direct file reads on Windows.** On Windows, Codex wraps shell calls (including `bash`/`rg`) in `powershell.exe`, which its sandbox blocks; the priming now steers it to its built-in file reading. Best-effort — the root cause is upstream in the Codex CLI.
+
+### Notes
+- The cwd invariant for `codex exec resume` (must `cd` to the same toplevel the fresh call used with `-C`) is documented inline in the three skill bodies.
+
 ## 0.3.0 — 2026-05-12
 
 ### Changed

@@ -2,7 +2,7 @@
 
 Claude Code plugin that integrates Codex as an adversarial reviewer in the Superpowers workflow. Eliminates manual copy-paste between Claude and Codex during design / plan / implementation review steps. Supports overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval at code-only decision gates.
 
-**Status:** v0.3.0
+**Status:** v0.3.1
 
 **v0.3.0 architecture note:** the plugin invokes Codex via the `codex exec` CLI through Bash with `run_in_background: true`, NOT via the Codex MCP server (which v0.1/v0.2 used). The change is to sidestep Claude Code's UI watchdog, which kills synchronous MCP tool calls that block its worker for ~10–12 min — below what reasoning-heavy Codex calls realistically need at `xhigh` reasoning effort. See [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480).
 

@@ -28,7 +28,7 @@ If invoked manually via `/cross-model-review-now <design|plan> [path]`:
 
 ## Universal Codex priming
 
-The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the Codex async CLI call section), written into the prompt file. It establishes Codex's role across all modes this project will use.
+The text below is the universal priming string. Send it verbatim to Codex on the first CLI call per project (the fresh-thread path in the **Codex async CLI call** section), written into the prompt file. It establishes Codex's role across all modes this project will use.
 
 ```
 You are participating as a second model in a software design and review
@@ -48,6 +48,12 @@ which role to play for that turn. The kinds are:
 - ad-hoc: single-question consultation requested by the user.
 
 Adapt to the tagged mode immediately. The tag is authoritative.
+
+Tool use on Windows: prefer your built-in file-reading capability over shell
+commands when inspecting the repo. On Windows your shell invocations — including
+`bash` and `rg` — get wrapped in `powershell.exe`, which the sandbox blocks, so
+shell-based grep/read attempts will fail. Read files directly instead. (Harmless
+on non-Windows hosts, where the shell works normally.)
 
 Occasionally Claude will send a [CHAIN-BOUNDARY] marker indicating a new
 task has begun. When you see this, treat the upcoming review as a fresh
@@ -312,9 +318,17 @@ codex exec --sandbox read-only -C <project-toplevel> --json \
 
 **Continuation** (attempted_thread_id set):
 ```bash
-codex exec resume <attempted_thread_id> --sandbox read-only -C <project-toplevel> --json \
+cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="read-only" --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
+
+> **cwd invariant (do not "simplify" away):** the leading `cd` is load-bearing.
+> Codex records and filters sessions by cwd; the fresh-thread call above mints
+> the thread from `<project-toplevel>` via `-C`, so resuming from that same
+> directory is how Codex locates the session. Do not drop the `cd`, and do not
+> add `--all` (which would disable cwd filtering). The fresh path keeps the
+> first-class `--sandbox`/`-C` flags deliberately — they fail loud if the CLI
+> changes again, whereas `-c sandbox_mode=` fails silent. (Design §4.2–4.3.)
 
 Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
 
@@ -360,8 +374,10 @@ When a Bash bg job's completion notification arrives in a future turn (after thi
      - **Stale-thread error in jsonl/stderr**: *"Detached `<kind>` review for `<chain-artifact>` failed: Codex thread `<attempted_thread_id>` expired. No action needed."*
      - **Result file non-empty but unparseable as findings**: *"Detached `<kind>` review for `<chain-artifact>` completed with corrupt output at `<result_file>`. See stderr at `<stderr_file>`."*
    - `status == "in_progress"`: proceed to step 5.
-5. **Check for stale-thread error (best-effort).** Scan `result_file`, `jsonl_file`, and `stderr_file` via allowlisted substring matching for patterns Codex emits when `codex exec resume` fails — currently observed: `"Session not found for thread_id"` and `"thread not found"`. (The Codex CLI does not document a stable machine-readable error contract for this case as of v0.125.0; treat as a fuzzy signal subject to drift.) If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Start a fresh review with `/cross-model-review-now <kind>` (the plugin will create a new thread)."* Set slot's `status: "stale_thread_error"` so `/cross-model-status` can explain. Do NOT auto-recover in v0.3.0. If neither pattern matches but the result is still empty/corrupt, fall through to generic failure handling rather than asserting stale-thread.
-6. **Read `result_file`** — Codex's final structured review.
+5. **Classify the outcome by positive evidence first.** Read `result_file`.
+   - **If `result_file` is non-empty and parseable as findings → treat as SUCCESS,** regardless of any stderr substrings. Additionally, if `stderr_file` contains `"failed to record rollout items"`, post a soft chat note: *"Codex emitted a rollout-recording error during this review (`failed to record rollout items`). The findings are complete, but this Codex thread's last turn may not have been persisted, so a later resume of it could be degraded."* Take NO state action. Proceed to step 6.
+   - **Only if `result_file` is empty or unparseable as findings:** scan `result_file`, `jsonl_file`, and `stderr_file` via allowlisted substring matching for stale-thread patterns Codex emits when `codex exec resume` fails — currently observed: `"Session not found for thread_id"` and `"thread not found"`. (The Codex CLI does not document a stable machine-readable error contract for this case as of v0.125.0; treat as a fuzzy signal subject to drift.) If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Start a fresh review with `/cross-model-review-now <kind>` (the plugin will create a new thread)."* Set slot's `status: "stale_thread_error"` so `/cross-model-status` can explain. Do NOT auto-recover in v0.3.0. If no stale-thread pattern matches either, fall through to generic failure handling.
+6. **Read `result_file`** — Codex's final structured review. (On the success path it was already read in step 5; this step parses/uses that content.)
 7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (only present on fresh-thread calls; on resume calls the thread_id equals `attempted_thread_id`).
 8. **Persist `thread_id`** to the relevant artifact's frontmatter and to `state.codex_thread_id` if this was the first review for the chain. Existing singleton fields (`codex_thread_id`, `active_chain_artifact`, `active_chain_branch`) retain their semantics: they represent the *most-recently-completed* chain; in-flight state lives in `codex_reviews_in_progress`.
 9. **Remove the slot** from `codex_reviews_in_progress`.
