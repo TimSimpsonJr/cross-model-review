@@ -240,7 +240,9 @@ When a Bash bg job's completion notification arrives in a future turn:
 4. **Branch on `status`:**
    - `status == "detached"` (user ran `/cross-model-reset` mid-stand-in): inspect result file; post a chat note per the four cases (non-empty / missing-or-empty / stale-thread / corrupt) per the pattern in `codex-plan-review`. Remove the slot. Brainstorming continues without this stand-in input (parent skill resumes when user provides actual input).
    - `status == "in_progress"`: proceed to step 5.
-5. **Check for stale-thread error (best-effort).** Scan `result_file`, `jsonl_file`, `stderr_file` for `"Session not found for thread_id"` / `"thread not found"`. If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Brainstorming continues with Claude only for this question."* Set slot's `status: "stale_thread_error"`. Remove the slot. Do NOT auto-recover.
+5. **Classify the outcome by positive evidence first.** Read `result_file`.
+   - **If `result_file` is non-empty and usable as a reply → treat as SUCCESS,** regardless of any stderr substrings. If `stderr_file` also contains `"failed to record rollout items"`, post a soft chat note: *"Codex emitted a rollout-recording error during this turn; its reply is complete, but a later resume of this thread could be degraded."* Take NO state action. Proceed to step 6.
+   - **Only if `result_file` is empty or unusable:** scan `result_file`, `jsonl_file`, `stderr_file` for `"Session not found for thread_id"` / `"thread not found"`. If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Brainstorming continues with Claude only for this question."* Set slot's `status: "stale_thread_error"`, remove the slot, and continue with Claude only. Do NOT auto-recover.
 6. **Read `result_file`** — Codex's reply, formatted as if it were the user's response.
 7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (fresh-thread case only) and persist to `state.codex_thread_id` if it was the first call.
 8. **Remove the slot** from `codex_reviews_in_progress`.
