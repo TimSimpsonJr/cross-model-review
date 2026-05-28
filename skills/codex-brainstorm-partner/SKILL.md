@@ -200,9 +200,17 @@ codex exec --sandbox read-only -C <project-toplevel> --json \
 
 **Continuation** (attempted_thread_id set):
 ```bash
-codex exec resume <attempted_thread_id> --sandbox read-only -C <project-toplevel> --json \
+cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="read-only" --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
+
+> **cwd invariant (do not "simplify" away):** the leading `cd` is load-bearing.
+> Codex records and filters sessions by cwd; the fresh-thread call above mints
+> the thread from `<project-toplevel>` via `-C`, so resuming from that same
+> directory is how Codex locates the session. Do not drop the `cd`, and do not
+> add `--all` (which would disable cwd filtering). The fresh path keeps the
+> first-class `--sandbox`/`-C` flags deliberately — they fail loud if the CLI
+> changes again, whereas `-c sandbox_mode=` fails silent. (Design §4.2–4.3.)
 
 Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
 
