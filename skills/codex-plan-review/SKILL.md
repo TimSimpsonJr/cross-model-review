@@ -477,23 +477,25 @@ budget-gate decisions.
 
 ### Routing (design §4)
 
-After receiving Codex response, first check session-level convergence;
-otherwise route each finding through the common entry check then the
-mode-specific path.
+After receiving Codex's response, parse the verdict and route from it.
 
-1. **Convergence signal** ("looks good", "approved", "no further concerns",
-   similar plain-language signal at the response level — not per-finding):
-   - APPROVAL. Write `codex_<kind>_status: approved` and
-     `codex_<kind>_approved_hash: <sha256>` to the artifact's frontmatter.
-   - Post summary chat note ("Codex approved <kind> after N rounds.").
-   - Exit loop.
+1. **Parse the verdict from the final non-empty line** (trimmed), requiring
+   exact equality to `[VERDICT: approved]` or `[VERDICT: changes-requested]`;
+   ignore any earlier occurrence (e.g. Codex quoting the contract back). A
+   literal token appearing anywhere but the final line is treated as ambiguous.
+   - `[VERDICT: approved]` → APPROVAL (see **On APPROVAL** below); the loop ends.
+   - `[VERDICT: changes-requested]` → continue to the entry check, then revise.
+   - **Final line is not an exact literal** (missing, reworded, or
+     markdown-wrapped) → regenerate once. Still no clean token → treat as
+     `changes-requested`; if there are also no actionable items, use the
+     garbage→retry→unavailable path in the Errors section.
 
-Otherwise, for each finding (or cluster):
+Then, for a `changes-requested` verdict:
 
 2. **Common entry check — user-input flagged** (Codex tagged "this is a
    user decision: ..." OR Claude classifies as UI/UX). **This check
-   outranks severity** — even a CRITICAL UI judgment call routes here, not
-   into substantive critique:
+   outranks the verdict** — even a CRITICAL UI judgment call routes here, not
+   into the revise step:
    - INTERACTIVE: post question in chat with optional PushNotification
      fire; end Claude turn (turn-taking handles pause).
    - AUTONOMOUS + regime = new: batch-defer to `design-input-needed`
@@ -505,12 +507,11 @@ Otherwise, for each finding (or cluster):
      most defensible default; continue loop with default applied.
      (Existing v0.1 behavior — unchanged.)
 
-3. **Substantive critique** (anything else Codex flagged — code-only
-   design flaws, plan deviations, missing edge cases, ambiguous specs):
-   - At `design-review` and `plan-review`, "substantive critique" means
-     **revise the artifact** (edit the design doc or plan doc directly)
-     and loop back to "Codex async CLI call" with revised content. `scope` is
-     `n-a` here.
+3. **Address the blocking items.** **Revise the artifact** (edit the design doc
+   or plan doc directly) to resolve ONLY the actionable blocking items Codex
+   listed, plus any `Non-blocking notes:` raised this round (fixed alongside the
+   blockers, re-reviewed for free next round). Then loop back to "Codex async
+   CLI call" with the revised content. `scope` is `n-a` here.
 
 Note: at design-review and plan-review gates, `autonomous-safe` issues
 are NOT produced. There is no code diff yet, so context-budget pressure
@@ -522,11 +523,12 @@ After every loop iteration: update `state.last_invocation = now()`,
 
 For this skill specifically:
 
-- **On APPROVAL:**
+- **On APPROVAL** (verdict `[VERDICT: approved]`):
+  - **Apply any `Non-blocking notes:` from the approving response as a single final polish edit to the artifact, then proceed — no further review round** (the items are non-blocking by construction). Skip this step if there were none.
   - Write the appropriate approval-status and approval-hash to the artifact's frontmatter:
     - `design-review`: `codex_design_review_status: approved` + `codex_design_review_approved_hash: <sha256>`.
     - `plan-review`: `codex_plan_review_status: approved` + `codex_plan_review_approved_hash: <sha256>`.
-  - Compute hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped entirely).
+  - Compute the hash per Section 9.7 of design doc (SHA-256 of body content with frontmatter stripped entirely), **on the post-polish body**, so the recorded hash matches the artifact that moves forward.
   - **Persist `codex_thread_id` to the artifact's frontmatter on EVERY approval** — applies to BOTH design docs AND plan docs. This is the load-bearing field for cross-machine frontmatter resume; both artifact types must carry it so a fresh install can resume from either. If the artifact already has `codex_thread_id` set (from a previous invocation), confirm it matches the current `state.codex_thread_id` and overwrite if different.
 - **On REVISE:** edit the artifact, then loop. For design-review revisions, edit the design doc directly. For plan-review revisions, edit the plan doc — flag any change that contradicts the previously-approved design as drift, and surface to user (interactive). In autonomous mode the drift note routes by regime: regime = pre-upgrade logs to the decisions file (existing v0.1 behavior — unchanged); regime = new defers to a `design-input-needed` issue (see the **Issue filing** section below for the helper mechanics).
 
