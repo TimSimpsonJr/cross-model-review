@@ -9,7 +9,7 @@ Adversarial review of design docs and implementation plans by Codex via async CL
 
 **Announce at start:** "Using codex-plan-review to invoke Codex review."
 
-**Priming for Claude (read this before invoking the loop):** Codex is reviewing this artifact as a peer reviewer. Treat its responses as peer-review feedback — read each critique, evaluate it, and either revise the artifact or push back with reasoning. When Codex signals it has no further substantive concerns, the artifact is finalized.
+**Priming for Claude (read this before invoking the loop):** Codex is reviewing this artifact as a peer reviewer. Treat its responses as peer-review feedback — read each critique, evaluate it, and either revise the artifact or push back with reasoning. When Codex returns `[VERDICT: approved]`, the artifact is finalized.
 
 **State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
 
