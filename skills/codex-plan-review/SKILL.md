@@ -256,12 +256,58 @@ Content depends on whether this is a fresh-thread or continuation call:
 **If `state.codex_thread_id` is null** (fresh thread):
 - Late-bound frontmatter resume check: look at the artifact's frontmatter for `codex_thread_id`. If present, set `attempted_thread_id = <that thread_id>` and use the continuation path below. If not (or artifact is a `branch:<branch>` anchor), use the true-fresh path below.
 
+**Per-turn framing.** Two blocks go into the prompt templates below, between the `[MODE: ...]` line and the artifact, every round.
+
+`<depth-header>` — choose by `<this-mode>`:
+
+- `design-review`:
+
+```text
+You are reviewing a DESIGN DOCUMENT at the architecture level. Read the repo
+only to check whether the design's assumptions about existing code hold (e.g. a
+module it relies on already works differently than assumed). Do NOT cite line
+numbers, nitpick naming, or raise implementation-level detail — that belongs at
+the implementation-plan gate, not here.
+```
+
+- `plan-review`:
+
+```text
+You are reviewing an IMPLEMENTATION PLAN. Verify it in detail against the actual
+repo: confirm referenced symbols exist and behave as the plan claims, check file
+paths, and flag any drift from the previously-approved design.
+```
+
+`<verdict-contract>` — sent verbatim every round; byte-identical to codex-impl-review's copy (lockstep):
+
+```text
+End your review with a verdict on its own line, as the final non-empty line of
+your response, exactly one of:
+  [VERDICT: approved]
+  [VERDICT: changes-requested]
+
+- approved = no blocking (critical or important) concerns remain.
+- changes-requested = at least one blocking concern. List ONLY the blocking
+  items, each as a concrete, actionable change Claude can make to earn approval
+  next round (with the [severity:…, scope:…, cluster:…] tag-line). Put any
+  non-blocking observations under a separate "Non-blocking notes:" heading;
+  they do NOT affect the verdict.
+
+Emit the token exactly once, unwrapped (no code block or bullet), spelled
+literally, with nothing after it. Decide the verdict at the end from your
+settled judgment.
+```
+
 **True-fresh content:**
 
 ```text
 <full universal priming text from the Universal Codex priming section>
 
 [MODE: <this-mode>]
+
+<depth-header>
+
+<verdict-contract>
 
 <artifact content>
 ```
@@ -272,6 +318,10 @@ Content depends on whether this is a fresh-thread or continuation call:
 [CHAIN-BOUNDARY] starting new task: <stem>; previous task: <old-stem>   ← only if chain_just_changed
 
 [MODE: <this-mode>]
+
+<depth-header>
+
+<verdict-contract>
 
 <artifact content>
 ```
