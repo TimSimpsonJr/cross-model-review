@@ -269,16 +269,17 @@ git commit -m "feat(impl-review): verdict parse; subagent-first minor routing"
 A per-chain round counter halts an autonomous run that will not converge.
 
 **Files:**
-- Modify: `skills/codex-plan-review/SKILL.md` (state writer contract, Chain update, Step 3, On-bg-completion)
+- Modify: `skills/codex-plan-review/SKILL.md` (state writer contract, duplicate-in-flight guard, Step 3, routing cap)
 - Modify: `skills/codex-impl-review/SKILL.md` (same four touchpoints)
+- Modify: `commands/cross-model-reset.md` (default-state YAML) and the other state-writing commands (`cross-model-autonomous-on/off.md`, `cross-model-skip.md`, `cross-model-review-now.md`) — propagate the field.
 
-**Step 1: Add the state field.** In each skill's state-writer contract, every fresh state write also emits `review_round_count: 0`. Updates preserve it.
+**Step 1: Add the state field.** In each skill's state-writer contract, every fresh state write also emits `review_round_count: 0`; updates preserve it. Propagate the same into the state-writing commands (reset's default-state YAML; the `Preserve … verbatim` instructions and fresh-create snippets in autonomous-on/off, skip, review-now).
 
-**Step 2: Reset on new chain.** In Chain update, when `chain_just_changed == true`, set `state.review_round_count = 0`.
+**Step 2: Reset at fresh-loop start.** In the Duplicate-in-flight guard (end of Chain update), when NO in-flight entry exists for this chain (a fresh review loop is beginning), set `state.review_round_count = 0`. Do NOT gate on `chain_just_changed` — impl-review never changes the chain, so a chain-change gate would never fire for it. Mid-loop rounds (2+) re-enter via On-bg-completion and bypass this guard, so the reset fires exactly once per loop.
 
-**Step 3: Increment per round.** In the Codex async CLI call Step 3 (pre-write state slot), increment `state.review_round_count` by 1 for the active chain.
+**Step 3: Increment per round.** In the Codex async CLI call Step 3 (pre-write state slot), increment `state.review_round_count` by 1 on every launch.
 
-**Step 4: Halt check.** In On-bg-completion, after parsing a `changes-requested` verdict: if **autonomous mode** AND `state.review_round_count >= 6` → do NOT loop; write a halt note (existing autonomous halt mechanism — `.claude/cross-model-review/halts/<chain-stem>.md` for regime=new), set `state.chain_status = halted`, post a chat note naming non-convergence, fire notification. **Interactive mode is uncapped.** Reset the counter to 0 on approval.
+**Step 4: Halt check.** In the routing, on a `changes-requested` verdict: if **autonomous mode** AND `state.review_round_count >= 6` → do NOT loop; write a halt note (existing autonomous halt mechanism — `.claude/cross-model-review/halts/<chain-stem>.md` for regime=new), set `state.chain_status = halted`, post a chat note naming non-convergence, fire notification. **Interactive mode is uncapped.** No separate reset-on-approval is needed: the fresh-loop reset (Step 2) zeroes the counter at the next loop, and On-bg-completion removes the in-flight slot before the halt, so a re-invocation after a halt finds no in-flight entry and resets.
 
 **Step 5: Verify.**
 ```bash
