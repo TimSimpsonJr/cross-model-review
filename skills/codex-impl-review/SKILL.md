@@ -252,6 +252,28 @@ stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
 **If `state.codex_thread_id` is null** (fresh thread):
 - Late-bound frontmatter resume check: look at the artifact's frontmatter (if a plan doc exists in the chain). If `codex_thread_id` is set, use the continuation path with `attempted_thread_id = <that thread_id>`. Otherwise (no plan doc OR no thread_id OR anchorless `branch:<branch>` anchor), use the true-fresh path.
 
+**Per-turn framing.** The verdict contract below goes into both prompt templates, after the "Review this implementation…" line, every round.
+
+`<verdict-contract>` — sent verbatim every round; byte-identical to codex-plan-review's copy (lockstep):
+
+```text
+End your review with a verdict on its own line, as the final non-empty line of
+your response, exactly one of:
+  [VERDICT: approved]
+  [VERDICT: changes-requested]
+
+- approved = no blocking (critical or important) concerns remain.
+- changes-requested = at least one blocking concern. List ONLY the blocking
+  items, each as a concrete, actionable change Claude can make to earn approval
+  next round (with the [severity:…, scope:…, cluster:…] tag-line). Put any
+  non-blocking observations under a separate "Non-blocking notes:" heading;
+  they do NOT affect the verdict.
+
+Emit the token exactly once, unwrapped (no code block or bullet), spelled
+literally, with nothing after it. Decide the verdict at the end from your
+settled judgment.
+```
+
 **True-fresh content:**
 
 ```text
@@ -264,6 +286,8 @@ stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
 <diff content (full `git diff <branch-base>..HEAD` output)>
 
 Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+
+<verdict-contract>
 ```
 
 **Continuation content (`state.codex_thread_id` set or late-bound resume):**
@@ -278,6 +302,8 @@ Review this implementation against the approved plan. Categorize findings as CRI
 <diff content>
 
 Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+
+<verdict-contract>
 ```
 
 Set `attempted_thread_id = state.codex_thread_id` (or the late-bound frontmatter thread_id) for continuation; `null` for true-fresh.
