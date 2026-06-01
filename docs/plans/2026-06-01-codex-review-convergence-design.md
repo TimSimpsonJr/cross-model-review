@@ -79,6 +79,14 @@ This makes the severity floor structural: only blocking items can appear in the
 actionable list, so `minor` findings physically cannot drive the loop. It also
 replaces fuzzy convergence detection with a real token.
 
+**Emission rules (validated with Codex, 2026-06-01).** Codex confirmed the
+format and recommended hardening: emit exactly **one** verdict token, as the
+**final non-empty line**, nothing after it, not wrapped in a code block or
+bullet, spelled as the exact literal. Decide the verdict at the end from settled
+judgment (draft freely; commit the token last). Under `changes-requested`, keep
+the blocking items as a clean list with no praise or optional suggestions mixed
+in — optional items live only under `Non-blocking notes:`.
+
 ### 2. Per-mode depth calibration
 
 A mode-specific **depth header** precedes the artifact in the per-turn prompt:
@@ -97,15 +105,19 @@ A mode-specific **depth header** precedes the artifact in the per-turn prompt:
 
 Replaces the current `plan-review`/`design-review` routing (`SKILL.md:427-480`):
 
-1. **Parse `[VERDICT: …]`.**
+1. **Parse the verdict from the final non-empty line** (trimmed), requiring
+   exact equality to one of the two literals; ignore any earlier occurrences
+   (e.g. if Codex quoted the contract back). Per Codex's validation, a literal
+   token appearing anywhere but the final line is treated as ambiguous.
    - `approved` → **stop.** Apply any `Non-blocking notes:` as a final polish
      edit (see §4), then write approval status + hash to frontmatter, post the
      "approved after N rounds" summary, exit loop.
    - `changes-requested` → go to step 3.
-   - **No parseable token** → treat as `changes-requested` (never auto-approve
-     without an explicit token). If Codex *also* returned no actionable items,
-     fall to the existing "garbage: retry once, then treat as unavailable" path
-     (`SKILL.md:694`).
+   - **Final line is not an exact literal** (missing, reworded, or
+     markdown-wrapped) → parse failure: regenerate once. Still no clean token →
+     treat as `changes-requested` (never auto-approve without an explicit
+     token); if there are also no actionable items, fall to the existing
+     "garbage: retry once, then treat as unavailable" path (`SKILL.md:694`).
 2. **User-input check (unchanged).** A "this is a user decision" flag still
    outranks severity and routes to the user (interactive) or a
    `design-input-needed` issue (autonomous).
