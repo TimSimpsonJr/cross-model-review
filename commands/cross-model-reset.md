@@ -39,7 +39,7 @@ Reset the cross-model-review chain to start fresh.
 
    If user declines: abort the reset entirely; no state changes; exit.
 
-3. Overwrite the state file with defaults — **preserving any detached entries from step 2.5** in `codex_reviews_in_progress`. Reset **preserves `context_limit_tokens`** (user-tuned project config) and sets **`filed_issues: []`** (reset establishes a fresh new-regime chain — the field is set, not omitted, per the writer contract in design §6.1):
+3. Overwrite the state file with defaults — **preserving any detached entries from step 2.5** in `codex_reviews_in_progress`. Reset **preserves `context_limit_tokens`** (user-tuned project config) and sets **`filed_issues: []`** and **`review_round_count: 0`** (reset establishes a fresh new-regime chain — the field is set, not omitted, per the writer contract in design §6.1):
 
    ```yaml
    ---
@@ -53,6 +53,7 @@ Reset the cross-model-review chain to start fresh.
    last_invocation_kind: null
    impl_review_approved_sha: null
    filed_issues: []
+   review_round_count: 0
    codex_reviews_in_progress: [<detached entries from step 2.5, if any>]
    context_limit_tokens: 200000
    session_start: <current ISO timestamp>
@@ -63,7 +64,7 @@ Reset the cross-model-review chain to start fresh.
    Auto-managed by the cross-model-review plugin. To reset, run `/cross-model-reset`.
    ```
 
-   The `200000` shown above is the fallback for a true fresh start. If a prior state file existed (captured in step 2), **preserve its `context_limit_tokens` value verbatim** — substitute it for `200000`. Only `filed_issues: []` and the detached-entry preservation are unconditional.
+   The `200000` shown above is the fallback for a true fresh start. If a prior state file existed (captured in step 2), **preserve its `context_limit_tokens` value verbatim** — substitute it for `200000`. Only `filed_issues: []`, `review_round_count: 0`, and the detached-entry preservation are unconditional.
 
 4. **Do NOT touch design or plan doc frontmatter.** Their `codex_thread_id` and approval fields persist as fallback for *new* installs without state files; they won't be consulted while the post-reset state file exists.
 

@@ -490,7 +490,7 @@ After receiving Codex's response, parse the verdict and route from it.
      `changes-requested`; if there are also no actionable items, use the
      garbage→retry→unavailable path in the Errors section.
 
-**Non-convergence cap (autonomous only).** On a `changes-requested` verdict, if AUTONOMOUS mode is active AND `state.review_round_count >= 6`, do NOT loop — HALT: write a halt note (`.claude/cross-model-review/halts/<chain-stem>.md` for regime=new, the per-chain decisions file for regime=pre-upgrade), set `state.chain_status = halted`, post a chat note naming non-convergence, and fire a notification. INTERACTIVE mode is uncapped (surface the round count and continue). The counter resets to 0 at the start of each fresh loop (see the duplicate-in-flight guard).
+**Non-convergence cap (autonomous only).** On a `changes-requested` verdict, if AUTONOMOUS mode is active AND `state.review_round_count >= 6`, do NOT loop — HALT: write a halt note (`.claude/cross-model-review/halts/<chain-stem>.md` for regime=new, the per-chain decisions file for regime=pre-upgrade), set `state.chain_status = halted`, post a chat note naming non-convergence, and fire a notification. INTERACTIVE mode is uncapped (surface the round count and continue). The counter resets to 0 at the start of each fresh loop (see the duplicate-in-flight guard). On-bg-completion removes this round's in-flight slot before this halt check runs, so a later fresh invocation finds no in-flight entry and resets the counter — preserve that ordering.
 
 Then, for a `changes-requested` verdict:
 
