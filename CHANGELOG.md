@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-06-01
+
+### Changed
+- **Review convergence is now a per-round verdict gate.** Codex ends every design/plan/impl review with a machine-parseable `[VERDICT: approved]` or `[VERDICT: changes-requested]` line (parsed from the final non-empty line, exact-literal match, regenerate-once on a miss) instead of Claude fuzzy-matching "looks good". Only blocking (critical/important) findings can appear in the actionable list, so minor nitpicks can no longer drive the loop — fixing the regression where plan/design reviews ran 9–10 rounds. Verdict format validated with Codex (gpt-5.4).
+- **Per-mode review depth, carried in the per-turn prompt.** `design-review` is now architecture-level (read the repo to check the design's assumptions hold, but no line-number nitpicks); `plan-review` and `impl-review` stay deep. Replaces the one-size-fits-all "cite file paths and line numbers" priming bullet that mis-calibrated the design gate. The verdict contract and depth header live in the per-turn prompt — re-sent every round — so they survive long-thread context drift.
+- **Non-blocking minors are fixed before moving on (design/plan gates).** Notes raised mid-loop ride along with the blocker fixes; notes raised in the approving response become a single final polish edit, with the approval hash computed on the post-polish body. No extra review round.
+- **impl-review minor routing is subagent-first.** Minor fixes default to a dispatched subagent (which absorbs the context cost in its own window); deferral to an `autonomous-safe` issue is reserved for fixes that aren't cleanly subagent-dispatchable. `pct`/`scope` now only choose inline-vs-subagent, never trigger deferral.
+
+### Added
+- **Autonomous non-convergence safety valve.** A per-chain `review_round_count` halts an autonomous review loop after 6 rounds still in `changes-requested` (writes a halt note, sets `chain_status: halted`, fires a notification). Interactive mode is uncapped. The counter resets at each fresh loop's start and propagates through all state-writing commands.
+
+### Notes
+- Lockstep discipline is now three-tier: universal priming byte-identical across all three skills; verdict-contract block byte-identical across the two review skills; per-mode depth headers not lockstep. Verified by `diff` after each change.
+
 ## 0.3.1 — 2026-05-28
 
 ### Fixed

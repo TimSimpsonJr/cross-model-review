@@ -34,7 +34,8 @@ cross-model-review/
 │   │   ├── 2026-05-12-codex-cli-async-invocation-plan.md # v0.3.0 async-CLI migration plan
 │   │   ├── 2026-05-28-codex-cli-compat-fixes-design.md   # v0.3.1 design (0.125.0 compat: #4/#5/#6)
 │   │   ├── 2026-05-28-codex-cli-compat-fixes-plan.md     # v0.3.1 implementation plan
-│   │   └── 2026-06-01-codex-review-convergence-design.md # verdict-gate + depth-calibration design
+│   │   ├── 2026-06-01-codex-review-convergence-design.md # verdict-gate + depth-calibration design
+│   │   └── 2026-06-01-codex-review-convergence-plan.md   # implementation plan for the above
 │   └── handoffs/
 │       ├── 2026-04-29-cross-model-review-sdd-handoff.md  # SDD kickoff handoff for fresh session
 │       └── 2026-05-12-codex-impl-review-crash-fixes.md   # investigation handoff (impl-review crashes)
@@ -59,4 +60,4 @@ cross-model-review/
 - **Hooks are advisory-only**: hookify-emitted rules never mutate state — they only inject reminder prompts when transcript patterns match. Skip-flag respect lives inside the prompt body itself (soft enforcement: the hookify message tells the model to honor the skip flag, but doesn't itself check filesystem state). Skill bodies and CLAUDE.md are the load-bearing layers.
 - **Issue-filing helper duplicated across two skills**: `skills/codex-plan-review/SKILL.md` and `skills/codex-impl-review/SKILL.md` carry byte-identical `## Issue filing` sections per the no-shared-prompts/ architecture. Verified by `diff` after each edit. v0.2 added this section.
 - **Hookify rule list duplicated across setup and status**: `commands/cross-model-setup.md` step 8 and `commands/cross-model-status.md` step 5 both enumerate the planned hookify rule files. Cross-reference notes in both files remind maintainers to update in lockstep when rules are added.
-- **Priming string and launch block are lockstep-duplicated across all three review skills** (`codex-plan-review`, `codex-impl-review`, `codex-brainstorm-partner`) and must be edited together and verified by `diff` — same discipline as the issue-filing helper. The on-bg-completion handler is parallel-but-not-identical across the three (plan/impl differ in chat-note wording; brainstorm-partner is a shorter variant), so handler edits are applied per-skill.
+- **Lockstep-duplicated blocks across the review skills**, edited together and verified by `diff`, come in three tiers: (1) the **universal priming** is byte-identical across all three skills (`codex-plan-review`, `codex-impl-review`, `codex-brainstorm-partner`); (2) the **per-turn verdict-contract block** is byte-identical across the two review skills (`codex-plan-review`, `codex-impl-review`) — brainstorm-partner has no verdict gate; (3) the **per-turn depth header** is mode-specific and NOT lockstep (architecture-level for design-review, deep for plan-review/impl-review). The on-bg-completion handler is parallel-but-not-identical across the three (plan/impl differ in chat-note wording; brainstorm-partner is a shorter variant), so handler edits are applied per-skill.
