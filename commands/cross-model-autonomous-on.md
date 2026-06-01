@@ -15,11 +15,12 @@ Enable autonomous mode for the cross-model-review plugin in this project.
    ```yaml
    filed_issues: []
    context_limit_tokens: 200000
+   review_round_count: 0
    ```
 
    alongside the other v0.1 defaults.
 
-2. Set `state.autonomous = true`. Update the state file on disk. **Preserve `filed_issues` and `context_limit_tokens` verbatim** — only flip `autonomous`.
+2. Set `state.autonomous = true`. Update the state file on disk. **Preserve `filed_issues`, `context_limit_tokens`, and `review_round_count` verbatim** — only flip `autonomous`.
 
 3. If `state.codex_thread_id` is null (no Codex calls yet this project), don't initialize a thread — just record the autonomous flag.
 

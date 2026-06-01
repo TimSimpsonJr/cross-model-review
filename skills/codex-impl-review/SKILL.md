@@ -9,9 +9,9 @@ Adversarial review of code diffs against the approved plan by Codex via async CL
 
 **Announce at start:** "Using codex-impl-review to invoke Codex review of the diff."
 
-**Priming for Claude:** Codex is reviewing the implementation against the approved plan. For findings flagged as bugs or plan deviations, dispatch a fix subagent (group related findings into one subagent invocation per group, not one per finding). For findings you disagree with, push back with technical reasoning. Loop until Codex approves or all CRITICAL/IMPORTANT issues are resolved.
+**Priming for Claude:** Codex is reviewing the implementation against the approved plan. For findings flagged as bugs or plan deviations, dispatch a fix subagent (group related findings into one subagent invocation per group, not one per finding). For findings you disagree with, push back with technical reasoning. Loop until Codex returns `[VERDICT: approved]` (no remaining blocking findings).
 
-**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []`, `context_limit_tokens: 200000`, and `review_round_count: 0` alongside the v0.1 defaults; every update preserves these fields verbatim.
 
 ## Determining the artifact
 
@@ -71,10 +71,11 @@ Modes details:
    document, or code diff for adversarial review. Find bugs, missing edge
    cases, ambiguous specifications, design flaws, plan deviations, or
    claims that don't match the actual repo. You have read-only access to
-   the working directory — verify claims against actual code. Be specific.
-   Cite file paths and line numbers. Avoid generic praise. Signal
-   convergence with 'looks good' or 'approved' when no further substantive
-   concerns.
+   the working directory. The depth and focus expected of you — and whether
+   to cite specific file paths and line numbers — depend on the mode and are
+   specified in each per-turn prompt; follow those instructions. Be specific
+   and avoid generic praise. Each review turn ends with a single
+   machine-parseable verdict line per the per-turn prompt's instructions.
 
    When returning findings, start each finding with a parseable tag line of
    this exact form:
@@ -223,7 +224,7 @@ to prepend the `[CHAIN-BOUNDARY] ...` marker to the prompt file.
 
 ### Duplicate-in-flight guard (compute AFTER active_chain_artifact is set)
 
-Now that `active_chain_artifact` reflects this invocation's target chain (either preserved from a prior call or set anew via anchorless-impl initialization), look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4).
+Now that `active_chain_artifact` reflects this invocation's target chain (either preserved from a prior call or set anew via anchorless-impl initialization), look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4). **If NO in-flight entry exists for this pair, this invocation begins a fresh review loop:** set `state.review_round_count = 0` before proceeding (the non-convergence cap counts rounds from here; mid-loop rounds re-enter via "On bg completion" and never pass through this guard, so the reset fires exactly once per loop).
 
 Raw-key dedup (not stem-matched) is a v0.3.0 limitation; see CHANGELOG.
 
@@ -251,6 +252,28 @@ stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
 **If `state.codex_thread_id` is null** (fresh thread):
 - Late-bound frontmatter resume check: look at the artifact's frontmatter (if a plan doc exists in the chain). If `codex_thread_id` is set, use the continuation path with `attempted_thread_id = <that thread_id>`. Otherwise (no plan doc OR no thread_id OR anchorless `branch:<branch>` anchor), use the true-fresh path.
 
+**Per-turn framing.** The verdict contract below goes into both prompt templates, after the "Review this implementation…" line, every round.
+
+`<verdict-contract>` — sent verbatim every round; byte-identical to codex-plan-review's copy (lockstep):
+
+```text
+End your review with a verdict on its own line, as the final non-empty line of
+your response, exactly one of:
+  [VERDICT: approved]
+  [VERDICT: changes-requested]
+
+- approved = no blocking (critical or important) concerns remain.
+- changes-requested = at least one blocking concern. List ONLY the blocking
+  items, each as a concrete, actionable change Claude can make to earn approval
+  next round (with the [severity:…, scope:…, cluster:…] tag-line). Put any
+  non-blocking observations under a separate "Non-blocking notes:" heading;
+  they do NOT affect the verdict.
+
+Emit the token exactly once, unwrapped (no code block or bullet), spelled
+literally, with nothing after it. Decide the verdict at the end from your
+settled judgment.
+```
+
 **True-fresh content:**
 
 ```text
@@ -263,6 +286,8 @@ stderr_file = /tmp/cmr-<launch_uuid>-stderr.txt
 <diff content (full `git diff <branch-base>..HEAD` output)>
 
 Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+
+<verdict-contract>
 ```
 
 **Continuation content (`state.codex_thread_id` set or late-bound resume):**
@@ -277,6 +302,8 @@ Review this implementation against the approved plan. Categorize findings as CRI
 <diff content>
 
 Review this implementation against the approved plan. Categorize findings as CRITICAL / IMPORTANT / MINOR per universal priming.
+
+<verdict-contract>
 ```
 
 Set `attempted_thread_id = state.codex_thread_id` (or the late-bound frontmatter thread_id) for continuation; `null` for true-fresh.
@@ -308,7 +335,7 @@ Append a new entry to `state.codex_reviews_in_progress`:
   started_at:  <ISO timestamp>
 ```
 
-Persist by writing the state file. **If the state write fails, abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash.
+Increment `state.review_round_count` by 1 — this launch is a new review round. Persist by writing the state file. **If the state write fails, abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash.
 
 ### Step 4: Launch via Bash with `run_in_background: true`
 
@@ -348,7 +375,7 @@ End the turn.
 
 ## Context-budget probe (impl-review only)
 
-Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
+Run this probe at each minor-finding routing decision in the loop. Produces `pct`
 (estimated working-context usage as a percentage). Per design §6.
 
 ### Probe procedure
@@ -397,7 +424,7 @@ Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
 
 ### Sampling
 
-Once per fix-vs-defer decision is sufficient. Do NOT run on every tool
+Once per minor-finding routing decision is sufficient. Do NOT run on every tool
 call; the probe is a soft signal, not a real-time tracker. ~4 tool
 calls per check (one Bash for toplevel, one Glob, one Bash for `wc`,
 plus arithmetic).
@@ -478,26 +505,33 @@ defensive insurance against the framing being ignored.
 
 Apply this filter BEFORE the routing logic in the Routing sub-section
 below. A filtered finding does NOT count toward the fix-loop or
-budget-gate decisions.
+routing decisions.
 
 ### Routing (design §4 impl-review path)
 
-After receiving Codex response, first check session-level convergence;
-otherwise route each finding through the common entry check, then the
-impl-review-specific severity + budget routing.
+After receiving Codex's response, parse the verdict (item 1 below). For a
+`changes-requested` verdict, route each finding through the common entry check,
+then the impl-review-specific severity routing.
 
-1. **Convergence signal** ("looks good", "approved", "no further concerns",
-   similar plain-language signal at the response level — not per-finding):
-   - APPROVAL. Write `state.impl_review_approved_sha = <git HEAD sha>`.
-   - Do NOT write `codex_impl_review_status` to any frontmatter — that
-     field does not exist in the schema. Only design-doc and plan-doc
-     frontmatter carry approval status; impl-review has no artifact
-     frontmatter. (See §9.7 of the original design doc
-     `2026-04-29-cross-model-review-design.md` for the schema enumeration.)
-   - Post summary chat note ("Codex approved impl-review after N rounds.").
-   - Exit loop.
+1. **Parse the verdict from the final non-empty line** (trimmed), requiring
+   exact equality to `[VERDICT: approved]` or `[VERDICT: changes-requested]`;
+   ignore any earlier occurrence (e.g. Codex quoting the contract back). A
+   literal token appearing anywhere but the final line is treated as ambiguous.
+   - `[VERDICT: approved]` → APPROVAL. Write `state.impl_review_approved_sha = <git HEAD sha>`.
+     Do NOT write `codex_impl_review_status` to any frontmatter — that field does
+     not exist in the schema (only design-doc and plan-doc frontmatter carry
+     approval status; impl-review has none; see §9.7 of the original design doc
+     `2026-04-29-cross-model-review-design.md`). Post summary chat note ("Codex
+     approved impl-review after N rounds."). Exit loop.
+   - `[VERDICT: changes-requested]` → route findings (below).
+   - **Final line not an exact literal** (missing, reworded, markdown-wrapped) →
+     regenerate once; still no clean token → treat as `changes-requested`, and if
+     there are also no actionable findings, use the garbage→retry→unavailable
+     path (Errors / Halt conditions).
 
-Otherwise, for each finding (or cluster):
+**Non-convergence cap (autonomous only).** On a `changes-requested` verdict, if AUTONOMOUS mode is active AND `state.review_round_count >= 6`, do NOT loop — HALT: write a halt note (`.claude/cross-model-review/halts/<chain-stem>.md`), set `state.chain_status = halted`, post a chat note naming non-convergence, and fire a notification (per **Halt conditions specific to impl-review**). INTERACTIVE mode is uncapped. The counter resets to 0 at the start of each fresh loop (see the duplicate-in-flight guard). On-bg-completion removes this round's in-flight slot before this halt check runs, so a later fresh invocation finds no in-flight entry and resets the counter — preserve that ordering.
+
+Then, for a `changes-requested` verdict, route each finding (or cluster):
 
 2. **Common entry check — user-input flagged** (Codex tagged "this is a
    user decision: ..." OR Claude classifies as UI/UX):
@@ -513,7 +547,7 @@ Otherwise, for each finding (or cluster):
      (Existing v0.1 behavior — unchanged.)
 
    **This check outranks severity** — even a CRITICAL UI judgment call
-   routes here, not into the fix-loop or budget gate below.
+   routes here, not into the fix-loop or severity routing below.
 
 3. **Impl-review-specific routing** (post entry check):
 
@@ -524,34 +558,34 @@ Otherwise, for each finding (or cluster):
      approve until all critical/important findings are resolved, so the
      loop continues until those clusters are cleared.
 
-   **3b. SEVERITY = minor (code-only — UI/UX minor was caught by the entry check above):**
-   - Run the context-budget probe (Section above: **Context-budget probe**)
-     to compute `pct` (estimated working-context usage as a percentage).
-   - Then route by `pct` and `scope`:
-     - `pct < 70%` AND `scope == small` → inline fix.
-     - `pct < 85%` AND `scope ∈ {small, medium}` → subagent fix
-       (offloads context from the working session).
-     - else → batch-defer to an `autonomous-safe` issue. (See the
-       **Issue filing** section below for the helper mechanics.)
+   **3b. Non-blocking minor (code-only — UI/UX minor was caught by the entry check above):**
+   - **Trivial + comfortable context** (small scope AND `pct` below ~70%) →
+     inline fix.
+   - **Otherwise → subagent fix.** This is the default. A subagent fixes in its
+     own context window, so large `scope` (lots to load) and high `pct` (a
+     loaded main session) are reasons to *dispatch a subagent*, NOT to defer.
+     Group by `cluster`; one subagent per cluster.
+   - **Defer to an `autonomous-safe` issue ONLY when the fix is not cleanly
+     subagent-dispatchable** — it needs cross-cutting / multi-file work, or is
+     large/risky enough to deserve its own reviewed PR. (Design-judgment cases
+     already routed to `design-input-needed` via the entry check above.)
 
-   Specific thresholds: `threshold_low = 70%`, `threshold_high = 85%`.
+   The context-budget probe (Section above: **Context-budget probe**) still
+   informs the **inline-vs-subagent** choice (`pct` ≳ 70% → prefer subagent);
+   `pct` and `scope` no longer trigger deferral on their own.
 
-   Throughout: prefer subagent dispatch over inline edit for any
-   non-trivial fix. Subagents offload context from the working session,
-   which is what the budget gate is protecting.
-
-**Note:** at impl-review, `autonomous-safe` issues ARE produced when the
-context-budget signal indicates that fixing would lose more than it gains.
-This is the inverse of the design/plan gates, where no autonomous-safe
-issues are filed because no code diff exists. Here, the diff exists and
-fixing it competes for working-session context.
+**Note:** at impl-review, `autonomous-safe` issues are still produced, but
+rarely — only when a minor fix is not cleanly subagent-dispatchable (per 3b).
+This is the inverse of the design/plan gates, where no autonomous-safe issues
+are filed because no code diff exists.
 
 After every loop iteration: update `state.last_invocation = now()`,
 `state.last_invocation_kind = "impl-review"`.
 
-**Approval condition:** Codex approves OR all CRITICAL/IMPORTANT findings
-are fixed (MINOR findings are routed per 3b — fixed in-session or
-deferred to issues — and do not block approval).
+**Approval condition:** the loop ends on `[VERDICT: approved]` — i.e. Codex has
+no remaining blocking (critical/important) findings. MINOR findings are routed
+per 3b (fixed in-session or, rarely, deferred to an issue) and never block the
+verdict.
 
 ## Issue filing (autonomous mode, new-regime chains)
 

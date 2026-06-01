@@ -24,9 +24,10 @@ Manually invoke a Codex review. Useful when auto-triggers misfire or when you wa
    ```yaml
    filed_issues: []
    context_limit_tokens: 200000
+   review_round_count: 0
    ```
 
-   alongside the other v0.1 defaults. If the state file exists, **preserve `filed_issues` and `context_limit_tokens` verbatim** on any subsequent write from this command.
+   alongside the other v0.1 defaults. If the state file exists, **preserve `filed_issues`, `context_limit_tokens`, and `review_round_count` verbatim** on any subsequent write from this command.
 
 3. Resolve the artifact per design doc Section 7.1:
 
