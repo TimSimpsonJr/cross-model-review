@@ -11,7 +11,7 @@ Adversarial review of design docs and implementation plans by Codex via async CL
 
 **Priming for Claude (read this before invoking the loop):** Codex is reviewing this artifact as a peer reviewer. Treat its responses as peer-review feedback — read each critique, evaluate it, and either revise the artifact or push back with reasoning. When Codex returns `[VERDICT: approved]`, the artifact is finalized.
 
-**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []` and `context_limit_tokens: 200000` alongside the v0.1 defaults; every update preserves both fields verbatim.
+**State-file writer contract (design §6.1):** every fresh state-file write from this skill emits `filed_issues: []`, `context_limit_tokens: 200000`, and `review_round_count: 0` alongside the v0.1 defaults; every update preserves these fields verbatim.
 
 ## Determining mode
 
@@ -226,7 +226,7 @@ to prepend the `[CHAIN-BOUNDARY] ...` marker to the prompt file.
 
 ### Duplicate-in-flight guard (compute AFTER active_chain_artifact is set)
 
-Now that `active_chain_artifact` reflects this invocation's target chain, look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4).
+Now that `active_chain_artifact` reflects this invocation's target chain, look up `(state.active_chain_artifact, state.active_chain_branch)` as a raw string-pair in `state.codex_reviews_in_progress`. If an entry with `status: "in_progress"` exists for this pair (any kind), **silently dedupe** — exit skill without launching another review (do NOT proceed to the Codex async CLI call). Manual invocations via `/cross-model-review-now` surface the dedup as a chat note instead of silent exit (per that command's step 4). **If NO in-flight entry exists for this pair, this invocation begins a fresh review loop:** set `state.review_round_count = 0` before proceeding (the non-convergence cap counts rounds from here; mid-loop rounds re-enter via "On bg completion" and never pass through this guard, so the reset fires exactly once per loop).
 
 Note the dedup is raw-key (not stem-matched); plan-review on the design doc and impl-review on `branch:<branch>` are technically the same logical chain but have different `chain_artifact` strings, so the dedup misses them — documented limitation, see v0.3.0 CHANGELOG.
 
@@ -357,7 +357,7 @@ Append a new entry to `state.codex_reviews_in_progress`:
   started_at:  <ISO timestamp>
 ```
 
-Persist by writing the state file. **If the state write fails (disk, permission, etc.), abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash. Tracking a bg job we can't reference is worse than not launching.
+Increment `state.review_round_count` by 1 — this launch is a new review round. Persist by writing the state file. **If the state write fails (disk, permission, etc.), abort the launch immediately** — post chat note describing the failure, do NOT invoke Bash. Tracking a bg job we can't reference is worse than not launching.
 
 ### Step 4: Launch via Bash with `run_in_background: true`
 
@@ -489,6 +489,8 @@ After receiving Codex's response, parse the verdict and route from it.
      markdown-wrapped) → regenerate once. Still no clean token → treat as
      `changes-requested`; if there are also no actionable items, use the
      garbage→retry→unavailable path in the Errors section.
+
+**Non-convergence cap (autonomous only).** On a `changes-requested` verdict, if AUTONOMOUS mode is active AND `state.review_round_count >= 6`, do NOT loop — HALT: write a halt note (`.claude/cross-model-review/halts/<chain-stem>.md` for regime=new, the per-chain decisions file for regime=pre-upgrade), set `state.chain_status = halted`, post a chat note naming non-convergence, and fire a notification. INTERACTIVE mode is uncapped (surface the round count and continue). The counter resets to 0 at the start of each fresh loop (see the duplicate-in-flight guard).
 
 Then, for a `changes-requested` verdict:
 
