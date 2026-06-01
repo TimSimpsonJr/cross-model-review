@@ -375,7 +375,7 @@ End the turn.
 
 ## Context-budget probe (impl-review only)
 
-Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
+Run this probe at each minor-finding routing decision in the loop. Produces `pct`
 (estimated working-context usage as a percentage). Per design §6.
 
 ### Probe procedure
@@ -424,7 +424,7 @@ Run this probe at each fix-vs-defer decision in the loop. Produces `pct`
 
 ### Sampling
 
-Once per fix-vs-defer decision is sufficient. Do NOT run on every tool
+Once per minor-finding routing decision is sufficient. Do NOT run on every tool
 call; the probe is a soft signal, not a real-time tracker. ~4 tool
 calls per check (one Bash for toplevel, one Glob, one Bash for `wc`,
 plus arithmetic).
@@ -505,13 +505,13 @@ defensive insurance against the framing being ignored.
 
 Apply this filter BEFORE the routing logic in the Routing sub-section
 below. A filtered finding does NOT count toward the fix-loop or
-budget-gate decisions.
+routing decisions.
 
 ### Routing (design §4 impl-review path)
 
-After receiving Codex response, first check session-level convergence;
-otherwise route each finding through the common entry check, then the
-impl-review-specific severity + budget routing.
+After receiving Codex's response, parse the verdict (item 1 below). For a
+`changes-requested` verdict, route each finding through the common entry check,
+then the impl-review-specific severity routing.
 
 1. **Parse the verdict from the final non-empty line** (trimmed), requiring
    exact equality to `[VERDICT: approved]` or `[VERDICT: changes-requested]`;
@@ -545,7 +545,7 @@ Then, for a `changes-requested` verdict, route each finding (or cluster):
      (Existing v0.1 behavior — unchanged.)
 
    **This check outranks severity** — even a CRITICAL UI judgment call
-   routes here, not into the fix-loop or budget gate below.
+   routes here, not into the fix-loop or severity routing below.
 
 3. **Impl-review-specific routing** (post entry check):
 
