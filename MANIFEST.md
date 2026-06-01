@@ -33,7 +33,8 @@ cross-model-review/
 │   │   ├── 2026-05-08-autonomous-issue-filing-plan.md    # v0.2 implementation plan
 │   │   ├── 2026-05-12-codex-cli-async-invocation-plan.md # v0.3.0 async-CLI migration plan
 │   │   ├── 2026-05-28-codex-cli-compat-fixes-design.md   # v0.3.1 design (0.125.0 compat: #4/#5/#6)
-│   │   └── 2026-05-28-codex-cli-compat-fixes-plan.md     # v0.3.1 implementation plan
+│   │   ├── 2026-05-28-codex-cli-compat-fixes-plan.md     # v0.3.1 implementation plan
+│   │   └── 2026-06-01-codex-review-convergence-design.md # verdict-gate + depth-calibration design
 │   └── handoffs/
 │       ├── 2026-04-29-cross-model-review-sdd-handoff.md  # SDD kickoff handoff for fresh session
 │       └── 2026-05-12-codex-impl-review-crash-fixes.md   # investigation handoff (impl-review crashes)
