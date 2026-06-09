@@ -99,9 +99,10 @@ Five changes, all scoped to v0.4.1:
 3. **Rollout handling:** keep v0.4.0's positive-evidence-first classification (already
    correct, and **untouched** by this fix); document the error as cosmetic and resume as
    working. (§6)
-4. **Runtime surfacing:** `/cross-model-status` reports the active Codex sandbox mode (and,
-   on Windows, that it is write-capable) — so the permission broadening is visible
-   in-product, not just in docs. (§6)
+4. **Runtime surfacing (two surfaces):** each review skill's launch chat note states the
+   active sandbox mode at the moment a review is launched (proactive notice of the
+   broadening), and `/cross-model-status` reports the mode this host would use for a new
+   launch (pull-discoverable). (§6)
 5. **Docs + issue updates + version bump.** (§6, §7, §9)
 
 A post-review git-mutation hardening guard was considered and **dropped** after round-1
@@ -214,12 +215,18 @@ stays byte-identical across all three skills (lockstep tier 1).
     ([codex#19475](https://github.com/openai/codex/issues/19475), fixed post-0.125.0);
     resume works.
   - Update the inline cwd-invariant note to reference the new `sandbox_mode` value.
-- **Surface the active sandbox mode in `/cross-model-status` (required, not optional).** The
-  status report (`commands/cross-model-status.md`) gains a line showing the active Codex
-  sandbox mode and, on Windows, a note that it is write-capable (in-repo writes possible;
-  network denied). This makes the read-only→workspace-write permission broadening visible
-  in-product on auto-triggered reviews, not only in README/MANIFEST. `/cross-model-status`
-  is read-only, so this is a display-only addition.
+- **Surface the active sandbox mode at two points (required, not optional):**
+  - **Proactive, at launch:** each review skill's Step 6 launch chat note (in
+    `codex-plan-review`, `codex-impl-review`, and `codex-brainstorm-partner`) gains the
+    active sandbox mode and, on Windows, a `write-capable (in-repo writes possible; network
+    denied)` note. The auto-triggered launch is the moment the read-only→workspace-write
+    broadening actually happens, so the notice must ride that launch note — `/cross-model-status`
+    alone (pull-only) would miss it.
+  - **Pull-discoverable:** `/cross-model-status` reports **the sandbox mode this host would
+    use for a new launch right now** (computed from `uname` per §4.1) — explicitly NOT a
+    per-in-flight-review field. Because §9.2 keeps the in-flight slot schema unchanged (no
+    sandbox field), status cannot truthfully report an already-running job's mode; it states
+    the host's current-launch mode to avoid overclaiming. Display-only, read-only command.
 
 ## 7. Issue updates (issue #9 decision 4 — upstream)
 
@@ -255,6 +262,10 @@ The edits touch only the lockstep blocks that are genuinely byte-identical acros
   lockstep, verify by `diff`.
 - **Step 4 launch block** (§4.2) — byte-identical across all three skills; the new
   `$SANDBOX_MODE` computation + both launch commands edited in lockstep, verify by `diff`.
+
+The **Step 6 launch chat note** (§6 surfacing) is **per-skill wording, NOT byte-identical**
+(plan/impl/brainstorm phrase their launch notes differently), so the active-sandbox notice
+is added to each skill individually — not as a lockstep block.
 
 The **on-bg-completion handler is NOT edited by this fix.** (Per `MANIFEST.md:63` it is
 "parallel-but-not-identical" across the three skills anyway — plan-review persists
@@ -300,11 +311,12 @@ This is a markdown-only plugin; verification is structural plus live checks:
 ## 12. File-by-file change list (input to writing-plans)
 
 - `skills/codex-plan-review/SKILL.md` — §4 launch block (uname-gated `$SANDBOX_MODE`, fresh
-  + resume); §5 priming rewrite. **On-bg-completion handler: no change.**
-- `skills/codex-impl-review/SKILL.md` — same two edits (launch + priming byte-identical to
-  plan-review). **On-bg-completion handler: no change.**
-- `skills/codex-brainstorm-partner/SKILL.md` — §4 launch block; §5 priming (byte-identical).
+  + resume); §5 priming rewrite; §6 Step 6 chat-note sandbox notice (per-skill wording).
   **On-bg-completion handler: no change.**
+- `skills/codex-impl-review/SKILL.md` — same launch + priming edits (byte-identical to
+  plan-review) + its own Step 6 chat-note notice. **On-bg-completion handler: no change.**
+- `skills/codex-brainstorm-partner/SKILL.md` — §4 launch block; §5 priming (byte-identical);
+  its own Step 6 chat-note notice. **On-bg-completion handler: no change.**
 - `commands/cross-model-status.md` — **required:** surface the active Codex sandbox mode +
   Windows write-capability in the read-only status report (per §6; round-2 review finding).
 - `README.md` — Windows `workspace-write` note + why (incl. the accepted residual); rollout-
