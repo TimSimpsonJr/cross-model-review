@@ -242,13 +242,18 @@ git commit -m "feat(review): surface active sandbox mode in each skill's launch 
    job's mode from it.
 ```
 
-**Step 2: Add the output line.** In the PERSISTED output template (step 6), add a line
-immediately after the `Mode:` line:
+**Step 2: Add the output line to BOTH output formats.** The mode is host-derived, so it must
+show even before any state file exists (plan-review finding).
 
+In the **PERSISTED** template (step 6), immediately after the `Mode:` line, add:
 ```
    Sandbox (this host): WORKSPACE-WRITE (Windows; in-repo writes possible, network denied) | READ-ONLY
       Mode this host would use for a NEW Codex launch (not a running job's mode).
 ```
+
+In the **NONE** template (step 6), immediately after its `Mode: — (defaults to interactive
+on first stateful action)` line, add the same `Sandbox (this host):` line. This makes the
+Windows `workspace-write` mode discoverable via `/cross-model-status` before first use.
 
 **Step 3: Verify.**
 ```bash
@@ -401,18 +406,28 @@ git commit -m "docs(manifest): rewrite to budget; OS-gated sandbox + new design/
 **Step 1: Re-confirm lockstep** (priming + launch block byte-identical) using the Task-1
 Step-2 and Task-2 Step-2 commands. Expected: both print BYTE-IDENTICAL.
 
-**Step 2: Live regression — the meaningful check.** On Windows, run a realistic multi-file
-design-review under the NEW `workspace-write` invocation and confirm **0 rejections**:
+**Step 2: Live regression — the meaningful check (review-depth, both sandboxes).** The Windows
+failure comes from Codex choosing PowerShell-heavy inspection shapes during a real review, so
+the regression MUST exercise review depth (multi-file, repo cross-checks) — not a couple of
+simple reads (which pass under `read-only` too). Reuse the design-investigation reproduction
+harness: embed a design doc and ask Codex to verify claims across the three skill files with
+`path:line` cross-checks, then run under BOTH sandboxes to show the delta:
 ```bash
-cd "$(git rev-parse --show-toplevel)"
-TOP=$(git rev-parse --show-toplevel)
-printf '[MODE: design-review]\n\nVerify against the repo whether skills/codex-plan-review/SKILL.md and skills/codex-impl-review/SKILL.md share a byte-identical Step-4 launch block. Inspect the files and answer YES/NO with evidence.\n' > /tmp/cmr-verify-prompt.txt
-codex exec --sandbox workspace-write -C "$TOP" -c model_reasoning_effort=low --json \
-  -o /tmp/cmr-verify-res.txt < /tmp/cmr-verify-prompt.txt > /tmp/cmr-verify-ev.jsonl 2> /tmp/cmr-verify-err.txt
-echo "rejections: $(grep -ciE 'blocked by policy|rejected' /tmp/cmr-verify-err.txt)"   # expect 0
-echo "completed: $(test -s /tmp/cmr-verify-res.txt && echo yes || echo no)"            # expect yes
+cd "$(git rev-parse --show-toplevel)"; TOP=$(git rev-parse --show-toplevel)
+{
+  echo "[MODE: design-review]"; echo
+  echo "Review-depth check: verify against the repo that skills/codex-plan-review/SKILL.md, skills/codex-impl-review/SKILL.md, and skills/codex-brainstorm-partner/SKILL.md each contain the universal-priming block AND a Step-4 launch block; confirm whether the priming and launch blocks are byte-identical across all three; and quote the resume command's exact flags in each. Cite path:line for every check. End with [VERDICT: approved] or [VERDICT: changes-requested]."
+  echo; echo "===== DESIGN ====="; cat docs/plans/2026-06-09-codex-windows-sandbox-fix-design.md
+} > /tmp/cmr-reg-prompt.txt
+for MODE in read-only workspace-write; do
+  codex exec --sandbox "$MODE" -C "$TOP" -c model_reasoning_effort=low --json \
+    -o /tmp/cmr-reg-$MODE-res.txt < /tmp/cmr-reg-prompt.txt > /tmp/cmr-reg-$MODE-ev.jsonl 2> /tmp/cmr-reg-$MODE-err.txt
+  echo "$MODE rejections: $(grep -ciE 'blocked by policy|rejected' /tmp/cmr-reg-$MODE-err.txt)  completed: $(test -s /tmp/cmr-reg-$MODE-res.txt && echo yes || echo no)"
+done
 ```
-Expected: `rejections: 0`, `completed: yes`.
+Expected: `read-only rejections:` **> 0** (the bug still reproduces under the old mode — proving
+the test has teeth) and `workspace-write rejections: 0  completed: yes` (the fix works). If
+workspace-write is not 0, the fix is incomplete — do NOT proceed to PR.
 
 **Step 3: Gating check.** Confirm the gating logic resolves correctly:
 ```bash
@@ -427,6 +442,16 @@ Expected: no substantive changes inside the "On bg completion" sections (only pr
 launch block, and Step-6 note changed).
 
 ---
+
+## Out of scope for v0.4.1 (explicit)
+
+- `commands/cross-model-setup.md` (the CLAUDE-mapping "ask codex about <X>" ad-hoc
+  consultation path, ~lines 54-66) is **intentionally untouched**. v0.4.1 scopes the
+  sandbox-mode fix and priming correction to the three review skills' launch blocks. The
+  ad-hoc consult is a manually-invoked documented pattern (not a skill-body launch block),
+  and aligning it to the OS-gated sandbox would mean editing the printed CLAUDE.md guidance
+  itself — a different surface/category. Tracked as a small follow-up docs touch, not
+  expanded into this bug-fix release. (Plan-review finding; accepted as out-of-scope.)
 
 ## Post-implementation: Codex impl-review + PR (autonomous closer)
 
