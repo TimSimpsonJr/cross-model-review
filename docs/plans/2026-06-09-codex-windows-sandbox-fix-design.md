@@ -1,11 +1,11 @@
 ---
-codex_thread_id: null
-codex_design_review_status: pending
+codex_thread_id: 019ead25-41cc-7583-83d0-9adb9a0b336d
+codex_design_review_status: changes-requested
 ---
 
 # Codex Windows Sandbox-Mode Fix — Design Document
 
-**Status:** Brainstorm complete; pending Codex design-review.
+**Status:** Brainstorm complete; in Codex design-review (round 1 returned changes; guard dropped).
 **Date:** 2026-06-09
 **Type:** Bug fix + priming correction to `cross-model-review` v0.4.0
 **Target version:** v0.4.1
@@ -74,8 +74,10 @@ Key facts established:
   writes denied**. `git status` was identical before/after every workspace-write and
   danger-full-access run — Codex never wrote anything (it is a reviewer; it only reads).
 - **Reviews complete under read-only today** (0 genuine bails in 15 realistic runs); the
-  catastrophic round-0 bail is a rare tail (1 genuine bail in ~12 ad-hoc probes). So the
-  read-only friction is a latency/noise problem (issue #5), not a correctness wall.
+  catastrophic round-0 bail is a rare tail (1 genuine bail in ~12 ad-hoc probes). The
+  round-1 Codex design-review of *this very document* reproduced it live: 16 `blocked by
+  policy` rejections, and the review still completed with accurate `file:line` citations.
+  So the read-only friction is a latency/noise problem (issue #5), not a correctness wall.
 
 ### 2.3 The priming line is factually wrong
 
@@ -87,19 +89,20 @@ Codex away from the one mechanism that works.
 
 ## 3. Design summary
 
-Five changes, all scoped to v0.4.1:
+Four changes, all scoped to v0.4.1:
 
 1. **Sandbox mode (core):** on Windows, switch the Codex sandbox `read-only` →
    `workspace-write`; keep `read-only` on macOS/Linux. Gate via `uname -s`. Eliminates the
    PowerShell block at the source. (§4)
-2. **Hardening:** a post-review git-mutation guard. Since `workspace-write` keeps the cwd
-   writable (verified: `writable_roots` cannot subtract it), detect unexpected working-tree
-   mutation after each review round and surface it. (§5)
-3. **Priming rewrite:** replace the fictional "built-in file-reading capability" paragraph
-   with accurate guidance, lockstep across all three skills. (§6)
-4. **Rollout handling:** keep v0.4.0's positive-evidence-first classification (already
-   correct); document the error as cosmetic and resume as working. (§7)
-5. **Docs + issue updates + version bump.** (§7, §8, §10)
+2. **Priming rewrite:** replace the fictional "built-in file-reading capability" paragraph
+   with accurate guidance, lockstep across all three skills. (§5)
+3. **Rollout handling:** keep v0.4.0's positive-evidence-first classification (already
+   correct, and **untouched** by this fix); document the error as cosmetic and resume as
+   working. (§6)
+4. **Docs + issue updates + version bump.** (§6, §7, §9)
+
+A post-review git-mutation hardening guard was considered and **dropped** after round-1
+Codex design-review (see §4.4 and §10).
 
 ## 4. Sandbox-mode change (the core fix)
 
@@ -143,42 +146,35 @@ documented in the v0.3.1 design and is preserved.
 `danger-full-access` also gives 0 rejections but **opens network access** — unacceptable
 for an autonomous, unsupervised reviewer (exfiltration risk). `workspace-write` is the
 least-privilege mode that clears the block: network denied, out-of-workspace writes denied.
-The only relaxation vs. read-only is in-repo writes, addressed by §5.
+The only relaxation vs. read-only is in-repo writes (see §4.4).
 
 ### 4.4 Security posture (explicit)
 
 The plugin only ever consumes Codex's **text output** (findings + verdict); it never
 executes anything Codex produces. Under `workspace-write` the residual capability is
-"Codex could write inside the repo during a review." Mitigations: network is denied (no
-exfiltration), out-of-workspace writes are denied, repo writes are git-recoverable, and
-empirically Codex never wrote in any test run. §5 adds detection.
+"Codex could write inside the repo during a review."
 
-## 5. Hardening — post-review git-mutation guard
+This residual is **accepted and documented** for v0.4.1, on these grounds: network is
+denied (no exfiltration), out-of-workspace writes are denied, repo writes are
+git-recoverable, and empirically Codex never wrote in any of ~20 test runs (including the
+round-1 review of this document). A sandbox-level "no repo writes" hardening is **not
+achievable** under workspace-write — verified: `-c
+'sandbox_workspace_write.writable_roots=["<scratch>"]'` still allowed a repo write, because
+`writable_roots` *adds* roots and cannot subtract the cwd.
 
-`workspace-write` always keeps the working directory (cwd = the repo, passed via `-C`)
-writable. This was verified: `workspace-write` with
-`-c 'sandbox_workspace_write.writable_roots=["<scratch>"]'` still allowed a repo write
-(`writable_roots` *adds* roots; it cannot subtract the cwd). So the hardening cannot live
-at the sandbox layer — it lives in the skill:
+A post-review git-mutation guard (snapshot `git status` before, compare after) was the
+candidate substitute. Round-1 Codex design-review found it unsound: a before/after snapshot
+cannot attribute a change to Codex vs. the user's own concurrent edits during a 1–15 min
+async review (it would false-halt on legitimate work), it misses gitignored writes —
+including the plugin's own state at `.claude/cross-model-review*` (`.gitignore:29-33`) — and
+it would require persisting the snapshot across the launch→completion turn boundary
+(contradicting "no schema change"). The only mechanism that actually fixes attribution is
+running each review in an isolated worktree/copy, which overlaps the unresolved
+[#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3) and is out of scope for a
+bug fix. The guard is therefore **dropped**; worktree-isolated reviews are filed as a
+follow-up (§10).
 
-- **Before launching** a Codex review round, the skill records a pre-review snapshot of the
-  working tree: `git status --porcelain` plus `git rev-parse HEAD`. (HEAD is already partly
-  tracked via `impl_review_approved_sha` for impl-review.)
-- **On bg-completion**, the skill re-runs `git status --porcelain` and compares. If the
-  working tree gained changes **not present before the review** (i.e., attributable to the
-  Codex round), the skill:
-  - **Interactive:** posts a chat-note warning naming the unexpected paths, and does NOT
-    proceed to route findings until acknowledged.
-  - **Autonomous:** writes a halt-note (`.claude/cross-model-review/halts/<chain-stem>.md`),
-    sets `chain_status = halted`, fires a notification.
-- **No auto-revert.** Reverting could clobber legitimate concurrent edits (the user may be
-  working in the same tree). The guard surfaces; the human decides.
-
-This is the only change touching the bg-completion handlers. It is scoped to detect
-*review-attributable* mutation only — pre-existing dirty state is captured in the snapshot
-and excluded, so it does not fire on the user's own in-progress work.
-
-## 6. Priming rewrite (lockstep across all three skills)
+## 5. Priming rewrite (lockstep across all three skills)
 
 Replace the v0.3.1 Windows paragraph in the universal priming string. Proposed wording
 (implementation may tighten):
@@ -197,21 +193,22 @@ Windows tail), instructs retry-not-bail, and pre-empts the cosmetic rollout log.
 about `[CHAIN-BOUNDARY]`, mode definitions, and the tag-line spec is unchanged. The string
 stays byte-identical across all three skills (lockstep tier 1).
 
-## 7. Rollout handling and documentation
+## 6. Rollout handling and documentation
 
-- **Keep** v0.4.0's positive-evidence-first classification in the on-bg-completion handler
-  (already correct — it treats a non-empty parseable result as success regardless of stderr,
-  and only scans for stale-thread markers when the result is empty/corrupt). No change.
+- **Keep, unchanged,** v0.4.0's positive-evidence-first classification in the
+  on-bg-completion handler (it treats a non-empty parseable result as success regardless of
+  stderr, and only scans for stale-thread markers when the result is empty/corrupt). This
+  fix does **not** touch the on-bg-completion handler in any skill.
 - **Document** (README, MANIFEST, CHANGELOG):
   - Windows uses `workspace-write`; macOS/Linux use `read-only`. Explain why (read-only
     blocks PowerShell on Windows; workspace-write still denies network + out-of-workspace
-    writes).
+    writes; the residual in-repo-write capability is accepted per §4.4).
   - The `failed to record rollout items` stderr is a known cosmetic Codex bug
     ([codex#19475](https://github.com/openai/codex/issues/19475), fixed post-0.125.0);
     resume works.
   - Update the inline cwd-invariant note to reference the new `sandbox_mode` value.
 
-## 8. Issue updates (issue #9 decision 4 — upstream)
+## 7. Issue updates (issue #9 decision 4 — upstream)
 
 - Comment on **#9** and **#5** with the empirical findings, the `workspace-write` fix, and
   the upstream references ([#57](https://github.com/openai/codex-plugin-cc/issues/57),
@@ -220,30 +217,39 @@ stays byte-identical across all three skills (lockstep tier 1).
   misdiagnosis (resume works; the rollout error is cosmetic and fixed upstream).
 - This fix **closes #5** (the PowerShell rejections it describes are eliminated by
   workspace-write) and **closes #9**.
+- File a new **`design-input-needed`** follow-up issue: "worktree-isolated Codex reviews"
+  (the proper hardening for the §4.4 residual; relates to #3).
 - No new upstream report is required: the block (#57/#18451) and the rollout error (#19475)
   are already tracked upstream. The README note recommends upgrading Codex past 0.125.0
   once #57 lands, at which point read-only could be revisited.
+
+## 8. (reserved)
+
+*(Section intentionally removed — the post-review mutation guard previously specified here
+was dropped per §4.4.)*
 
 ## 9. Cross-cutting concerns
 
 ### 9.1 Lockstep duplication
 
-The edits touch the three-tier lockstep blocks (MANIFEST "three tiers"):
+The edits touch only the lockstep blocks that are genuinely byte-identical across skills:
 
-- **Universal priming string** (§6) — byte-identical across all three skills; edit in
+- **Universal priming string** (§5) — byte-identical across all three skills; edit in
   lockstep, verify by `diff`.
 - **Step 4 launch block** (§4.2) — byte-identical across all three skills; the new
   `$SANDBOX_MODE` computation + both launch commands edited in lockstep, verify by `diff`.
-- **On-bg-completion handler** (§5) — `codex-plan-review` and `codex-impl-review` are
-  byte-identical; `codex-brainstorm-partner` is the shorter variant, so the git-mutation
-  guard is *adapted* to it (it has no findings-routing, but the pre/post snapshot +
-  surfacing applies). impl-review additionally already snapshots HEAD.
 
-### 9.2 No change to chain/state model
+The **on-bg-completion handler is NOT edited by this fix.** (Per `MANIFEST.md:63` it is
+"parallel-but-not-identical" across the three skills anyway — plan-review persists
+`thread_id` to artifact frontmatter, impl-review updates state only, brainstorm is a shorter
+variant — so it must never be treated as byte-identical. Since this fix leaves it untouched,
+that distinction does not come into play here.)
 
-The fix does not alter the state schema, chain tracking, dedup guards, verdict gate, or
-issue-filing. The pre-review git snapshot for §5 is transient (computed per round, not
-persisted beyond the in-flight slot).
+### 9.2 No state/schema change
+
+With the mutation guard dropped, the fix introduces no new persisted state, no new slot
+fields, and no temp-file lifecycle. The state schema, chain tracking, dedup guards, verdict
+gate, and issue-filing are unchanged.
 
 ## 10. Testing & verification
 
@@ -251,15 +257,14 @@ This is a markdown-only plugin; verification is structural plus live checks:
 
 - **Live regression (the meaningful one):** re-run a realistic multi-file design-review
   under the new `workspace-write` invocation on Windows and confirm **0 `blocked by policy`
-  rejections** in stderr and a clean `[VERDICT: ...]` completion. The reproduction harness
-  built during this investigation is retained for this.
+  rejections** in stderr and a clean completion. The reproduction harness built during this
+  investigation is retained for this.
 - **Gating check:** confirm the `uname` logic selects `read-only` on a non-MINGW shell and
   `workspace-write` on Git Bash.
 - **Lockstep diffs:** after editing, `diff` the priming string and the launch block across
-  the three skills to confirm byte-identical (§6, §4.2); manually confirm the §5 handler
-  change is consistent (plan/impl identical, brainstorm adapted).
-- **Mutation guard:** simulate a review-attributable working-tree change and confirm the
-  guard surfaces it (interactive warning / autonomous halt-note) without auto-reverting.
+  the three skills to confirm byte-identical (§5, §4.2).
+- **No-handler-change check:** confirm the on-bg-completion handlers are unchanged by this
+  fix (the §4.4 guard was dropped).
 
 ## 11. Out of scope / deferred
 
@@ -269,24 +274,24 @@ This is a markdown-only plugin; verification is structural plus live checks:
 - Embed-files + fresh-thread workaround (the original #9 proposal) — rejected: reviews
   complete and resume works, so it solves non-problems at high token cost and a large
   lockstep surface.
+- **Worktree-isolated Codex reviews** — the proper hardening for the §4.4 in-repo-write
+  residual (the only mechanism that fixes attribution + coverage). Filed as a follow-up
+  (§7); overlaps [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3).
 - Sandbox-level "no repo writes" hardening — not enforceable under workspace-write
-  (verified); the §5 git guard is the substitute.
-- Concurrent isolated chains via git worktrees ([#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3))
-  — untouched.
+  (verified); see §4.4.
 
 ## 12. File-by-file change list (input to writing-plans)
 
 - `skills/codex-plan-review/SKILL.md` — §4 launch block (uname-gated `$SANDBOX_MODE`, fresh
-  + resume); §5 mutation guard in bootstrap (pre-snapshot) + on-bg-completion (post-check);
-  §6 priming rewrite.
-- `skills/codex-impl-review/SKILL.md` — same three edits (launch + priming byte-identical to
-  plan-review; handler byte-identical to plan-review).
-- `skills/codex-brainstorm-partner/SKILL.md` — §4 launch block; §6 priming (byte-identical);
-  §5 mutation guard adapted to its shorter handler variant.
+  + resume); §5 priming rewrite. **On-bg-completion handler: no change.**
+- `skills/codex-impl-review/SKILL.md` — same two edits (launch + priming byte-identical to
+  plan-review). **On-bg-completion handler: no change.**
+- `skills/codex-brainstorm-partner/SKILL.md` — §4 launch block; §5 priming (byte-identical).
+  **On-bg-completion handler: no change.**
 - `commands/cross-model-status.md` — optional: surface the active sandbox mode in the
   read-only status report (nice-to-have; confirm during plan).
-- `README.md` — Windows `workspace-write` note + why; rollout-error-cosmetic note; upgrade
-  recommendation.
+- `README.md` — Windows `workspace-write` note + why (incl. the accepted residual); rollout-
+  error-cosmetic note; upgrade recommendation.
 - `MANIFEST.md` — full rewrite to budget before PR merge (per repo convention); update the
   `Targets Codex CLI` line + cwd-invariant relationship note for the new sandbox value.
 - `CHANGELOG.md` — v0.4.1 entry (#9/#5; sandbox-mode change called out).
