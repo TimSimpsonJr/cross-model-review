@@ -1,6 +1,7 @@
 ---
 codex_thread_id: 019ead25-41cc-7583-83d0-9adb9a0b336d
-codex_design_review_status: changes-requested
+codex_design_review_status: approved
+codex_design_review_approved_hash: cec41ed06db99d84fa36f5cd949a52e15244b50b41392d7bb597376d1a61b1e1
 ---
 
 # Codex Windows Sandbox-Mode Fix — Design Document
