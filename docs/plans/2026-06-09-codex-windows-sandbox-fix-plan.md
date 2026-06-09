@@ -274,7 +274,14 @@ git commit -m "feat(status): report the host's active Codex sandbox mode"
 **Files:**
 - Modify: `README.md`
 
-**Step 1: Fix the now-inaccurate read-only line.** Find:
+**Step 1: Update the version header, then fix the now-inaccurate read-only line.**
+
+First, update the README version/status header (around `README.md:5`, currently
+`**Status:** v0.3.1`) to `**Status:** v0.4.1` so the README matches the shipped version
+(plan-review finding — otherwise plugin.json/CHANGELOG say 0.4.1 while the README header
+still says v0.3.1).
+
+Then find:
 `- File contents Codex chooses to read via its read-only sandbox (the plugin doesn't pre-package file contents; Codex requests them).`
 Replace with:
 `- File contents Codex reads via its sandbox (read-only on macOS/Linux; workspace-write on Windows — see Sandbox notes). The plugin doesn't pre-package file contents; Codex reads them itself.`
@@ -309,8 +316,11 @@ is recommended when that lands.
 **Step 3: Verify.**
 ```bash
 grep -n "Sandbox & platform notes\|workspace-write" README.md
+grep -nE '\*\*Status:\*\* v0\.4\.1' README.md && echo "OK: README header is v0.4.1" || echo "FAIL: README header not updated"
+grep -nE 'v0\.3\.1' README.md   # expect only historical references (Upgrading section), NOT the Status header
 ```
-Expected: section heading + at least one `workspace-write` mention.
+Expected: Sandbox section heading + a `workspace-write` mention; `OK: README header is v0.4.1`;
+any remaining `v0.3.1` hits are only in the historical "Upgrading from v0.1 / v0.2" section.
 
 **Step 4: Commit.**
 ```bash
@@ -425,9 +435,13 @@ for MODE in read-only workspace-write; do
   echo "$MODE rejections: $(grep -ciE 'blocked by policy|rejected' /tmp/cmr-reg-$MODE-err.txt)  completed: $(test -s /tmp/cmr-reg-$MODE-res.txt && echo yes || echo no)"
 done
 ```
-Expected: `read-only rejections:` **> 0** (the bug still reproduces under the old mode — proving
-the test has teeth) and `workspace-write rejections: 0  completed: yes` (the fix works). If
-workspace-write is not 0, the fix is incomplete — do NOT proceed to PR.
+Expected — **the MUST-PASS gate is `workspace-write rejections: 0  completed: yes`**; that is
+the release condition. The `read-only` run is **comparative evidence only, NOT a gate**: it
+usually shows rejections (>0), but the count depends on which inspection shapes Codex happens
+to choose on that run, so a `read-only` run that incidentally yields 0 does **not** fail the
+release (design §2.2 characterizes `read-only` as latency/noise, not a hard wall). If
+`workspace-write` is not `0` with a clean completion, the fix is incomplete — do NOT proceed
+to PR.
 
 **Step 3: Gating check.** Confirm the gating logic resolves correctly:
 ```bash
