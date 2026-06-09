@@ -89,7 +89,7 @@ Codex away from the one mechanism that works.
 
 ## 3. Design summary
 
-Four changes, all scoped to v0.4.1:
+Five changes, all scoped to v0.4.1:
 
 1. **Sandbox mode (core):** on Windows, switch the Codex sandbox `read-only` →
    `workspace-write`; keep `read-only` on macOS/Linux. Gate via `uname -s`. Eliminates the
@@ -99,7 +99,10 @@ Four changes, all scoped to v0.4.1:
 3. **Rollout handling:** keep v0.4.0's positive-evidence-first classification (already
    correct, and **untouched** by this fix); document the error as cosmetic and resume as
    working. (§6)
-4. **Docs + issue updates + version bump.** (§6, §7, §9)
+4. **Runtime surfacing:** `/cross-model-status` reports the active Codex sandbox mode (and,
+   on Windows, that it is write-capable) — so the permission broadening is visible
+   in-product, not just in docs. (§6)
+5. **Docs + issue updates + version bump.** (§6, §7, §9)
 
 A post-review git-mutation hardening guard was considered and **dropped** after round-1
 Codex design-review (see §4.4 and §10).
@@ -155,9 +158,13 @@ executes anything Codex produces. Under `workspace-write` the residual capabilit
 "Codex could write inside the repo during a review."
 
 This residual is **accepted and documented** for v0.4.1, on these grounds: network is
-denied (no exfiltration), out-of-workspace writes are denied, repo writes are
+denied (no exfiltration), out-of-workspace writes are denied, writes to *tracked* files are
 git-recoverable, and empirically Codex never wrote in any of ~20 test runs (including the
-round-1 review of this document). A sandbox-level "no repo writes" hardening is **not
+round-1 review of this document). The residual **explicitly includes writes to
+ignored/untracked paths** — notably the plugin's own runtime state under
+`.claude/cross-model-review*` (`.gitignore:29-33`), which are **not** git-recoverable; this
+is part of what the §6 `/cross-model-status` surfacing makes visible. A sandbox-level "no
+repo writes" hardening is **not
 achievable** under workspace-write — verified: `-c
 'sandbox_workspace_write.writable_roots=["<scratch>"]'` still allowed a repo write, because
 `writable_roots` *adds* roots and cannot subtract the cwd.
@@ -193,7 +200,7 @@ Windows tail), instructs retry-not-bail, and pre-empts the cosmetic rollout log.
 about `[CHAIN-BOUNDARY]`, mode definitions, and the tag-line spec is unchanged. The string
 stays byte-identical across all three skills (lockstep tier 1).
 
-## 6. Rollout handling and documentation
+## 6. Rollout handling, documentation, and runtime surfacing
 
 - **Keep, unchanged,** v0.4.0's positive-evidence-first classification in the
   on-bg-completion handler (it treats a non-empty parseable result as success regardless of
@@ -207,6 +214,12 @@ stays byte-identical across all three skills (lockstep tier 1).
     ([codex#19475](https://github.com/openai/codex/issues/19475), fixed post-0.125.0);
     resume works.
   - Update the inline cwd-invariant note to reference the new `sandbox_mode` value.
+- **Surface the active sandbox mode in `/cross-model-status` (required, not optional).** The
+  status report (`commands/cross-model-status.md`) gains a line showing the active Codex
+  sandbox mode and, on Windows, a note that it is write-capable (in-repo writes possible;
+  network denied). This makes the read-only→workspace-write permission broadening visible
+  in-product on auto-triggered reviews, not only in README/MANIFEST. `/cross-model-status`
+  is read-only, so this is a display-only addition.
 
 ## 7. Issue updates (issue #9 decision 4 — upstream)
 
@@ -217,8 +230,12 @@ stays byte-identical across all three skills (lockstep tier 1).
   misdiagnosis (resume works; the rollout error is cosmetic and fixed upstream).
 - This fix **closes #5** (the PowerShell rejections it describes are eliminated by
   workspace-write) and **closes #9**.
-- File a new **`design-input-needed`** follow-up issue: "worktree-isolated Codex reviews"
-  (the proper hardening for the §4.4 residual; relates to #3).
+- Record **worktree-isolated Codex reviews** (the proper hardening for the §4.4 residual)
+  by commenting on the existing worktree issue
+  [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3) — **not** a new
+  `design-input-needed` issue. Per the repo label taxonomy (`commands/cross-model-setup.md:83-87`),
+  `design-input-needed` means a user decision blocks work; this is engineering hardening with
+  no blocking user decision, so it folds into #3 (or a plain tracking issue) instead.
 - No new upstream report is required: the block (#57/#18451) and the rollout error (#19475)
   are already tracked upstream. The README note recommends upgrading Codex past 0.125.0
   once #57 lands, at which point read-only could be revisited.
@@ -275,8 +292,8 @@ This is a markdown-only plugin; verification is structural plus live checks:
   complete and resume works, so it solves non-problems at high token cost and a large
   lockstep surface.
 - **Worktree-isolated Codex reviews** — the proper hardening for the §4.4 in-repo-write
-  residual (the only mechanism that fixes attribution + coverage). Filed as a follow-up
-  (§7); overlaps [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3).
+  residual (the only mechanism that fixes attribution + coverage). Folded into
+  [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3) (§7).
 - Sandbox-level "no repo writes" hardening — not enforceable under workspace-write
   (verified); see §4.4.
 
@@ -288,8 +305,8 @@ This is a markdown-only plugin; verification is structural plus live checks:
   plan-review). **On-bg-completion handler: no change.**
 - `skills/codex-brainstorm-partner/SKILL.md` — §4 launch block; §5 priming (byte-identical).
   **On-bg-completion handler: no change.**
-- `commands/cross-model-status.md` — optional: surface the active sandbox mode in the
-  read-only status report (nice-to-have; confirm during plan).
+- `commands/cross-model-status.md` — **required:** surface the active Codex sandbox mode +
+  Windows write-capability in the read-only status report (per §6; round-2 review finding).
 - `README.md` — Windows `workspace-write` note + why (incl. the accepted residual); rollout-
   error-cosmetic note; upgrade recommendation.
 - `MANIFEST.md` — full rewrite to budget before PR merge (per repo convention); update the
