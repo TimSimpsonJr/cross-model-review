@@ -65,6 +65,19 @@ unable to proceed. (You may see a `failed to record rollout items` line in the l
 it is a harmless known Codex log — ignore it.)
 ```
 
+**Step 1b: Also replace the stale capability claim** (same universal-priming block,
+byte-identical across all three skills). Find:
+```
+You have read-only access to the working directory.
+```
+Replace with:
+```
+You can read the working directory to verify claims — you are a reviewer, so inspect it but do not modify it.
+```
+After Task 2 switches Windows to `workspace-write`, the old "read-only access" claim is
+factually wrong on Windows; this behavioral instruction is accurate on all platforms and
+reinforces that Codex must not write even where it technically could.
+
 **Step 2: Verify byte-identical across the three skills.**
 
 Run (Git Bash):
@@ -78,9 +91,10 @@ diff /tmp/p-plan.txt /tmp/p-impl.txt && diff /tmp/p-plan.txt /tmp/p-brain.txt &&
 Expected: `PRIMING BYTE-IDENTICAL` (no diff output). Also confirm the new paragraph is
 present and the old "built-in file-reading capability" string is gone:
 ```bash
-grep -rl "built-in file-reading capability" skills/ && echo "FAIL: old text remains" || echo "OK: old text removed"
+grep -rl "built-in file-reading capability" skills/ && echo "FAIL: old priming text remains" || echo "OK: old priming text removed"
+grep -rl "read-only access to the working directory" skills/ && echo "FAIL: stale read-only claim remains" || echo "OK: read-only claim updated"
 ```
-Expected: `OK: old text removed`.
+Expected: both `OK:` lines.
 
 **Step 3: Commit.**
 ```bash
@@ -335,6 +349,7 @@ git commit -m "docs(readme): document Windows workspace-write sandbox + cosmetic
 **Files:**
 - Modify: `CHANGELOG.md`
 - Modify: `.claude-plugin/plugin.json`
+- Modify: `.claude-plugin/marketplace.json`
 
 **Step 1: Add the v0.4.1 section** at the top of `CHANGELOG.md` (above `## 0.4.0`):
 
@@ -366,19 +381,22 @@ git commit -m "docs(readme): document Windows workspace-write sandbox + cosmetic
   [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3).
 ```
 
-**Step 2: Bump the version** in `.claude-plugin/plugin.json`: `"version": "0.4.0"` →
-`"version": "0.4.1"`.
+**Step 2: Bump the version to `0.4.1` in BOTH manifest files.** In
+`.claude-plugin/plugin.json`: `"version": "0.4.0"` → `"version": "0.4.1"`. In
+`.claude-plugin/marketplace.json`: its `metadata.version` is currently `"0.3.0"` (it lagged
+the 0.4.0 release — plan-review finding) → set it to `"0.4.1"`.
 
 **Step 3: Verify.**
 ```bash
-grep -m1 '"version"' .claude-plugin/plugin.json   # expect 0.4.1
-head -5 CHANGELOG.md | grep -q "0.4.1" || grep -n "0.4.1" CHANGELOG.md
+grep -m1 '"version"' .claude-plugin/plugin.json        # expect 0.4.1
+grep -n '"version"' .claude-plugin/marketplace.json    # expect 0.4.1 (was 0.3.0)
+grep -n "0.4.1" CHANGELOG.md | head -1
 ```
 
 **Step 4: Commit.**
 ```bash
-git add CHANGELOG.md .claude-plugin/plugin.json
-git commit -m "chore: v0.4.1 — CHANGELOG + version bump"
+git add CHANGELOG.md .claude-plugin/plugin.json .claude-plugin/marketplace.json
+git commit -m "chore: v0.4.1 — CHANGELOG + version bump (plugin + marketplace manifests)"
 ```
 
 ---
@@ -395,8 +413,11 @@ budget before PR merge. Update specifically:
 - The **cwd-invariant** Key-Relationships note: reference the OS-gated `$SANDBOX_MODE` value.
 - Add the new `docs/plans/2026-06-09-codex-windows-sandbox-fix-{design,plan}.md` to the
   Structure index (group with the other per-phase design/plan docs).
-- Keep the three-tier lockstep note accurate: priming + launch block are byte-identical
-  lockstep; Step-6 note and on-bg handler are per-skill.
+- Keep the lockstep taxonomy accurate AND complete (do not drop tiers): **universal priming
+  byte-identical across all 3 skills**; **Step-4 launch block byte-identical across all 3**;
+  **verdict-contract block byte-identical across the 2 review skills** (plan-review +
+  impl-review — per `MANIFEST.md:63`; do NOT lose this tier); **Step-6 launch notes** and
+  **on-bg-completion handlers** remain **per-skill** (not lockstep).
 
 **Verify:** line count within budget:
 ```bash
