@@ -239,7 +239,7 @@ Update the slot's `bg_id` from `"pending"` to the actual `bash_id`. Persist stat
 
 ### Step 6: Post chat note and end the turn
 
-Post: *"Codex stand-in thinking about the brainstorming question (typical 1–5 min at `xhigh` reasoning for a single question). Will surface response when complete."*
+Post: *"Codex stand-in thinking about the brainstorming question — sandbox `$SANDBOX_MODE` (on Windows this is `workspace-write`: Codex can write in-repo, network denied); typical 1–5 min at `xhigh` reasoning for a single question. Will surface response when complete."*
 
 End the turn. The parent brainstorming flow stays paused at its turn boundary waiting for "the user's response" (which will arrive via Codex on a subsequent turn).
 

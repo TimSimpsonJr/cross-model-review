@@ -381,7 +381,7 @@ If the bg job completed before this update committed, the on-completion handler 
 
 ### Step 6: Post chat note and end the turn
 
-Post: *"Codex impl-review running in the background (typical 5–15 min at `xhigh` reasoning). I'll surface findings when the background job completes."*
+Post: *"Codex impl-review running in the background — sandbox `$SANDBOX_MODE` (on Windows this is `workspace-write`: Codex can write in-repo, network denied); typical 5–15 min at `xhigh` reasoning. I'll surface findings when the background job completes."*
 
 End the turn.
 

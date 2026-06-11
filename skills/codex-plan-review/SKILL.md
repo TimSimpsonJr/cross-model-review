@@ -403,7 +403,7 @@ If the bg job completed before this state write committed (rare race — only fi
 
 ### Step 6: Post chat note and end the turn
 
-Post: *"Codex `<this-mode>` running in the background (typical 5–15 min at `xhigh` reasoning). I'll surface findings when the background job completes."*
+Post: *"Codex `<this-mode>` running in the background — sandbox `$SANDBOX_MODE` (on Windows this is `workspace-write`: Codex can write in-repo, network denied); typical 5–15 min at `xhigh` reasoning. I'll surface findings when the background job completes."*
 
 End the turn. Claude's harness notifies on bg completion; the next turn picks up the result via **On bg completion** below.
 
