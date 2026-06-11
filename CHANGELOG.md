@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.1 — 2026-06-11
+
+### Fixed
+- **#9 / #5 — Windows PowerShell sandbox block.** On Windows, Codex's `read-only` command
+  policy rejected its PowerShell-wrapped file reads (`blocked by policy`), wasting review
+  latency and occasionally making Codex bail. The Codex sandbox is now OS-gated (via
+  `uname`): **`workspace-write` on Windows** (clears the block; network + out-of-workspace
+  writes still denied), `read-only` on macOS/Linux (unchanged). Investigation showed the
+  other half of #9 was a misdiagnosis: `codex exec resume` works and preserves continuity,
+  and `failed to record rollout items` is a cosmetic upstream bug
+  ([codex#19475](https://github.com/openai/codex/issues/19475), fixed post-0.125.0).
+
+### Changed
+- **Universal priming corrected.** Replaced the v0.3.1 line that told Codex to "prefer your
+  built-in file-reading capability" (no such tool exists in 0.125.0 — the shell is its only
+  file access) with accurate guidance: read via simple shell commands, reformulate-and-retry
+  on rejection, ignore the cosmetic rollout log. The stale "You have read-only access to the
+  working directory" claim became a behavioral "inspect but do not modify" instruction.
+- **Active sandbox mode is surfaced** in each review skill's launch chat note and in
+  `/cross-model-status` (the mode this host would use for a new launch), so the Windows
+  read-only→workspace-write broadening is visible in-product.
+
+### Notes
+- The in-repo-write residual under Windows `workspace-write` is accepted for this release;
+  worktree-isolated reviews (the robust hardening) are tracked in
+  [#3](https://github.com/TimSimpsonJr/cross-model-review/issues/3).
+
 ## 0.4.0 — 2026-06-01
 
 ### Changed
