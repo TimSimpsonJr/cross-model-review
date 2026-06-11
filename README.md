@@ -2,7 +2,7 @@
 
 Claude Code plugin that integrates Codex as an adversarial reviewer in the Superpowers workflow. Eliminates manual copy-paste between Claude and Codex during design / plan / implementation review steps. Supports overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval at code-only decision gates.
 
-**Status:** v0.3.1
+**Status:** v0.4.1
 
 **v0.3.0 architecture note:** the plugin invokes Codex via the `codex exec` CLI through Bash with `run_in_background: true`, NOT via the Codex MCP server (which v0.1/v0.2 used). The change is to sidestep Claude Code's UI watchdog, which kills synchronous MCP tool calls that block its worker for ~10–12 min — below what reasoning-heavy Codex calls realistically need at `xhigh` reasoning effort. See [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480).
 
@@ -60,6 +60,28 @@ Natural-language phrases also route to commands — see CLAUDE.md additions prin
 - Writable `.claude/` directory in your project (v0.3.0 requires persisted state for async reviews; ephemeral / projectless mode is unsupported)
 - *Optional:* `hookify` plugin — enables Layer 3 backup nudges at Stop events. The plugin works without it; skill bodies and CLAUDE.md routing (Layers 1+2) still carry the load.
 
+## Sandbox & platform notes
+
+Codex reviews run under a sandbox selected by the host OS (auto-detected via `uname`):
+
+- **macOS / Linux (incl. WSL):** `read-only` — Codex can read the repo but not write or
+  reach the network.
+- **Windows (Git Bash):** `workspace-write`. On Windows the `read-only` command policy
+  rejects Codex's PowerShell-wrapped reads (`blocked by policy`; upstream
+  [openai/codex-plugin-cc#57](https://github.com/openai/codex-plugin-cc/issues/57)), which
+  wastes review latency and can occasionally make Codex give up. `workspace-write` clears
+  that block while still **denying network access and out-of-workspace writes**. The
+  residual is that Codex *could* write inside the repo during a review (git-recoverable for
+  tracked files; ignored/untracked writes — including the plugin's own `.claude/`
+  state — are not). The active mode is shown in each review's launch note and in
+  `/cross-model-status`.
+- A `failed to record rollout items` line in Codex's stderr is a **harmless known bug**
+  ([openai/codex#19475](https://github.com/openai/codex/issues/19475), fixed after 0.125.0);
+  reviews and `codex exec resume` work despite it.
+
+Once #57 is fixed upstream, Windows can return to `read-only`; upgrading Codex past 0.125.0
+is recommended when that lands.
+
 ## What gets sent to Codex
 
 Privacy / egress note. The plugin forwards the following to OpenAI's Codex via the `codex exec` CLI invocation:
@@ -68,7 +90,7 @@ Privacy / egress note. The plugin forwards the following to OpenAI's Codex via t
 - Implementation plan content during plan-review.
 - `git diff` content during impl-review.
 - Conversation context for the active Codex thread (cumulative within a project).
-- File contents Codex chooses to read via its read-only sandbox (the plugin doesn't pre-package file contents; Codex requests them).
+- File contents Codex reads via its sandbox (read-only on macOS/Linux; workspace-write on Windows — see Sandbox & platform notes). The plugin doesn't pre-package file contents; Codex reads them itself.
 
 To disable Codex involvement temporarily: `/cross-model-skip` (one-shot). To uninstall: `/plugin uninstall cross-model-review`.
 

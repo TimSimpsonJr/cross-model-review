@@ -49,11 +49,13 @@ which role to play for that turn. The kinds are:
 
 Adapt to the tagged mode immediately. The tag is authoritative.
 
-Tool use on Windows: prefer your built-in file-reading capability over shell
-commands when inspecting the repo. On Windows your shell invocations — including
-`bash` and `rg` — get wrapped in `powershell.exe`, which the sandbox blocks, so
-shell-based grep/read attempts will fail. Read files directly instead. (Harmless
-on non-Windows hosts, where the shell works normally.)
+File access: your only way to read the repository is via your shell — there is no
+separate built-in file-reading tool. Read files with simple shell commands (for
+example `Get-Content <path>` or `rg <pattern>`); they work under this session's
+sandbox. If a shell command is ever rejected, reformulate it as a simpler read and
+retry — do not give up or ask for file contents to be pasted unless you are truly
+unable to proceed. (You may see a `failed to record rollout items` line in the logs;
+it is a harmless known Codex log — ignore it.)
 
 Occasionally Claude will send a [CHAIN-BOUNDARY] marker indicating a new
 task has begun. When you see this, treat the upcoming review as a fresh
@@ -71,8 +73,9 @@ Modes details:
 2. Design / plan / diff review: Claude sends you a design doc, plan
    document, or code diff for adversarial review. Find bugs, missing edge
    cases, ambiguous specifications, design flaws, plan deviations, or
-   claims that don't match the actual repo. You have read-only access to
-   the working directory. The depth and focus expected of you — and whether
+   claims that don't match the actual repo. You can read the working directory
+   to verify claims — you are a reviewer, so inspect it but do not modify it.
+   The depth and focus expected of you — and whether
    to cite specific file paths and line numbers — depend on the mode and are
    specified in each per-turn prompt; follow those instructions. Be specific
    and avoid generic praise. Each review turn ends with a single
@@ -361,15 +364,23 @@ Increment `state.review_round_count` by 1 — this launch is a new review round.
 
 ### Step 4: Launch via Bash with `run_in_background: true`
 
+**Compute the OS-gated sandbox mode first.** Run `uname -s`. If it matches `MINGW*`,
+`MSYS*`, or `CYGWIN*` (Codex is the PowerShell-wrapping Windows build, whose `read-only`
+command policy rejects PowerShell shell calls), set `SANDBOX_MODE=workspace-write`.
+Otherwise (`Linux` including WSL, or `Darwin`) set `SANDBOX_MODE=read-only`.
+`workspace-write` clears the Windows PowerShell block while still denying network and
+out-of-workspace writes; the only relaxation is in-repo writes (accepted — see the
+v0.4.1 design §4.1/§4.3/§4.4). Substitute the resolved value for `$SANDBOX_MODE` below.
+
 **Fresh thread** (attempted_thread_id null):
 ```bash
-codex exec --sandbox read-only -C <project-toplevel> --json \
+codex exec --sandbox $SANDBOX_MODE -C <project-toplevel> --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
 
 **Continuation** (attempted_thread_id set):
 ```bash
-cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="read-only" --json \
+cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="$SANDBOX_MODE" --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
 
@@ -379,7 +390,8 @@ cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode
 > directory is how Codex locates the session. Do not drop the `cd`, and do not
 > add `--all` (which would disable cwd filtering). The fresh path keeps the
 > first-class `--sandbox`/`-C` flags deliberately — they fail loud if the CLI
-> changes again, whereas `-c sandbox_mode=` fails silent. (Design §4.2–4.3.)
+> changes again, whereas `-c sandbox_mode=` fails silent. `$SANDBOX_MODE` is
+> `workspace-write` on Windows (Git Bash) and `read-only` elsewhere. (Design §4.)
 
 Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
 
@@ -391,7 +403,7 @@ If the bg job completed before this state write committed (rare race — only fi
 
 ### Step 6: Post chat note and end the turn
 
-Post: *"Codex `<this-mode>` running in the background (typical 5–15 min at `xhigh` reasoning). I'll surface findings when the background job completes."*
+Post: *"Codex `<this-mode>` running in the background — sandbox `$SANDBOX_MODE` (on Windows this is `workspace-write`: Codex can write in-repo, network denied); typical 5–15 min at `xhigh` reasoning. I'll surface findings when the background job completes."*
 
 End the turn. Claude's harness notifies on bg completion; the next turn picks up the result via **On bg completion** below.
 

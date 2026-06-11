@@ -85,6 +85,14 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
    The "(re-run /cross-model-setup …)" suffix only appears when N < M.
    Used in the PERSISTED output template below.
 
+5.5. **Host sandbox mode (read-only display).** Run `uname -s`. If it matches
+   `MINGW*` / `MSYS*` / `CYGWIN*`, the host's Codex launches use
+   `workspace-write` (write-capable: in-repo writes possible, network denied);
+   otherwise `read-only`. This reports the mode THIS HOST would use for a NEW
+   launch right now — it is NOT a per-in-flight-review field (the in-flight slot
+   schema has no sandbox field; v0.4.1 design §6/§9.2). Do not infer a running
+   job's mode from it.
+
 6. Output the status block. Two formats based on step 2 outcome:
 
    **PERSISTED state with active chain:**
@@ -97,6 +105,8 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       Frontmatter resume is SUPPRESSED while state file exists.
 
    Mode:           INTERACTIVE | AUTONOMOUS  (per state.autonomous)
+   Sandbox (this host): WORKSPACE-WRITE (Windows; in-repo writes possible, network denied) | READ-ONLY
+      Mode this host would use for a NEW Codex launch (not a running job's mode).
 
    Codex thread:   <thread_id>  (most-recently-completed chain; in-flight threads tracked below)
    Active chain:   <state.active_chain_artifact>
@@ -152,6 +162,8 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       invoke this plugin from a normal project context.
 
    Mode:           — (defaults to interactive on first stateful action)
+   Sandbox (this host): WORKSPACE-WRITE (Windows; in-repo writes possible, network denied) | READ-ONLY
+      Mode this host would use for a NEW Codex launch (not a running job's mode).
 
    To begin: invoke any cross-model-review skill, slash command (other than
    /cross-model-status or /cross-model-setup), or trigger an auto-review by

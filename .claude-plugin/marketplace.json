@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Codex integration via async CLI invocation for adversarial review of designs, plans, and implementations.",
-    "version": "0.3.0"
+    "version": "0.4.1"
   },
   "plugins": [
     {
