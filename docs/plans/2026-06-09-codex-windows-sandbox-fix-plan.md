@@ -1,6 +1,7 @@
 ---
-codex_thread_id: null
-codex_plan_review_status: pending
+codex_thread_id: 019eb719-2f5d-7860-bba6-dc17e8a20133
+codex_plan_review_status: approved
+codex_plan_review_approved_hash: 6e05bcd406870d71e0c8c3b6c1b1c54c1306035dc2e91473683915a0abface1a
 ---
 
 # Codex Windows Sandbox-Mode Fix — Implementation Plan
