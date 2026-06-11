@@ -364,15 +364,23 @@ Increment `state.review_round_count` by 1 — this launch is a new review round.
 
 ### Step 4: Launch via Bash with `run_in_background: true`
 
+**Compute the OS-gated sandbox mode first.** Run `uname -s`. If it matches `MINGW*`,
+`MSYS*`, or `CYGWIN*` (Codex is the PowerShell-wrapping Windows build, whose `read-only`
+command policy rejects PowerShell shell calls), set `SANDBOX_MODE=workspace-write`.
+Otherwise (`Linux` including WSL, or `Darwin`) set `SANDBOX_MODE=read-only`.
+`workspace-write` clears the Windows PowerShell block while still denying network and
+out-of-workspace writes; the only relaxation is in-repo writes (accepted — see the
+v0.4.1 design §4.1/§4.3/§4.4). Substitute the resolved value for `$SANDBOX_MODE` below.
+
 **Fresh thread** (attempted_thread_id null):
 ```bash
-codex exec --sandbox read-only -C <project-toplevel> --json \
+codex exec --sandbox $SANDBOX_MODE -C <project-toplevel> --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
 
 **Continuation** (attempted_thread_id set):
 ```bash
-cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="read-only" --json \
+cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode="$SANDBOX_MODE" --json \
   -o <result_file> < <prompt_file> > <jsonl_file> 2> <stderr_file>
 ```
 
@@ -382,7 +390,8 @@ cd <project-toplevel> && codex exec resume <attempted_thread_id> -c sandbox_mode
 > directory is how Codex locates the session. Do not drop the `cd`, and do not
 > add `--all` (which would disable cwd filtering). The fresh path keeps the
 > first-class `--sandbox`/`-C` flags deliberately — they fail loud if the CLI
-> changes again, whereas `-c sandbox_mode=` fails silent. (Design §4.2–4.3.)
+> changes again, whereas `-c sandbox_mode=` fails silent. `$SANDBOX_MODE` is
+> `workspace-write` on Windows (Git Bash) and `read-only` elsewhere. (Design §4.)
 
 Use the Bash tool with `run_in_background: true`. Capture the returned `bash_id`.
 
