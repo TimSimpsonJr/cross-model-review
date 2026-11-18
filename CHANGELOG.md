@@ -34,10 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exact `claude mcp remove <name> -s <scope>` command; it removes nothing itself.
 
 ### Notes
-- Usage-limit markers were taken from the Codex CLI source (`codex-rs/protocol/src/error.rs`,
-  `codex-rs/exec/src/exec_events.rs`) rather than a captured failure; wording may drift
-  across Codex releases, and an unmatched failure falls to generic handling, never to
-  "expired thread".
+- Usage-limit markers were checked against the Codex CLI source at 0.125.0, 0.151.0 and
+  0.170.0 (`codex-rs/protocol/src/error.rs`, `codex-rs/exec/src/exec_events.rs`) and against
+  the strings in the 0.170.0 binary, not a captured usage-limit failure. The usage-limit
+  apostrophe changed from straight to curly between releases, so the classifier matches on
+  `usage limit`. An unmatched failure falls to generic handling, never to "expired thread".
 
 ## 0.4.1 — 2026-06-11
 
