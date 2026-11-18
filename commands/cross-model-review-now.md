@@ -31,17 +31,19 @@ Manually invoke a Codex review. Useful when auto-triggers misfire or when you wa
 
 3. Resolve the artifact per design doc Section 7.1:
 
+   Plan-doc roots (searched everywhere below): `docs/superpowers/specs/` (design docs, superpowers ≥5), `docs/superpowers/plans/` (plans, superpowers ≥5), and legacy `docs/plans/` (both, superpowers ≤4.3; kept for pre-v5 chains).
+
    **For `design`:**
-   - If `state.active_chain_artifact` matches `docs/plans/*-design.md` → use it.
-   - Else if explicit path passed → use it; verify exists.
-   - Else search `docs/plans/` for the most recent `*-design.md` on the current branch within last 24h. If exactly one → use it. Zero or many → ask (interactive) / halt + log (autonomous).
+   - If explicit path passed → use it; verify exists.
+   - Else if `state.active_chain_artifact` matches `docs/superpowers/specs/*-design.md` or `docs/plans/*-design.md` → use it.
+   - Else search `docs/superpowers/specs/` and `docs/plans/` for the most recent `*-design.md` on the current branch within last 24h. If exactly one → use it. Zero or many → ask (interactive) / halt + log (autonomous).
 
    **For `plan`:**
    - If explicit path passed → use it.
-   - Else if `state.active_chain_artifact` matches `*-design.md` → derive plan path: strip `-design`, look for `<stem>.md` or `<stem>-plan.md`. If exactly one exists → use it.
+   - Else if `state.active_chain_artifact` matches `*-design.md` → derive plan path: strip `-design`, look for `<stem>.md` or `<stem>-plan.md` in the design's own directory and, when the design is under `docs/superpowers/specs/`, in `docs/superpowers/plans/`. If exactly one exists → use it.
    - Else if `state.active_chain_artifact` matches a plan doc → use it directly.
    - Else if `state.active_chain_artifact` is `branch:<branch-name>` → error: "Anchorless impl-only chain — no plan doc to review. Use `/cross-model-review-now impl` instead."
-   - Else search; same disambiguation as design.
+   - Else search `docs/superpowers/plans/` and `docs/plans/` for the most recent plan doc (any `*.md` that is not `*-design.md`; legacy `docs/plans/` mixes both) on the current branch within last 24h; same disambiguation as design.
 
    **For `impl`:**
    - Must be on a feature branch.
@@ -60,7 +62,7 @@ Manually invoke a Codex review. Useful when auto-triggers misfire or when you wa
    but the plugin stops tracking it; no cancel-and-kill in v0.3.0).
    ```
 
-   Note: the dedup is raw `(chain_artifact, branch)` string-pair, NOT stem-matched. Edge case (documented limitation, see v0.3.0 CHANGELOG): plan-review on `docs/plans/foo-plan.md` and a concurrent `/cross-model-review-now impl` (which resolves to `branch:<branch>`) target the same logical chain but have different `chain_artifact` strings, so dedup misses the conflict. The user-visible failure mode is split continuity: two Codex threads for one logical chain. Stem-matching dedup is future refinement.
+   Note: the dedup is raw `(chain_artifact, branch)` string-pair, NOT stem-matched. Edge case (documented limitation, see v0.3.0 CHANGELOG): plan-review on `docs/superpowers/plans/foo.md` and a concurrent `/cross-model-review-now impl` (which resolves to `branch:<branch>`) target the same logical chain but have different `chain_artifact` strings, so dedup misses the conflict. The user-visible failure mode is split continuity: two Codex threads for one logical chain. Stem-matching dedup is future refinement.
 
    Reviews of DIFFERENT chain artifacts in the same project, or the same artifact on different branches, are legitimately concurrent and proceed in parallel.
 

@@ -14,7 +14,17 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    - Output: "Codex CLI not found on PATH (or version is below 0.125.0). The cross-model-review plugin v0.3.0+ uses the Codex CLI via async Bash invocation — the MCP server is no longer required. Install or upgrade via `npm install -g @openai/codex` and re-run `/cross-model-setup`."
    - Exit.
 
-   Note: prior plugin versions (v0.1, v0.2) required the Codex MCP server. v0.3.0+ uses the CLI directly to bypass Claude Code's UI watchdog (see [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480)). If you previously configured the MCP server, you can leave it configured — it's unused but not harmful — or remove its entry from `~/.claude/mcp_servers.json` / per-project `.mcp.json`.
+   Note: prior plugin versions (v0.1, v0.2) required the Codex MCP server. v0.3.0+ uses the CLI directly to bypass Claude Code's UI watchdog (see [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480)). A leftover Codex MCP server entry should be removed — see step 1.5.
+
+1.5. **Report any leftover Codex MCP server (report only; never remove).** The plugin does not use the Codex MCP server, and a leftover entry is not harmless: on Windows it can fail to connect, leak a `codex.exe` process per session, and tempt agents to call `mcp__codex__*` tools instead of the plugin's CLI flow.
+   - Read the config files directly: `~/.claude.json` (the top-level `mcpServers` map and each `projects.<path>.mcpServers` map), `~/.claude/mcp_servers.json` if it exists, and the current project's `.mcp.json` if it exists. Do NOT run `claude mcp list` for this check: it health-checks every server, which itself launches `codex mcp-server` (the process that leaks on Windows).
+   - A Codex MCP entry is any server whose command/args launch `codex mcp-server` (or the older `codex mcp`), or whose name is `codex` and launches the `codex` binary.
+   - For each one found, note its name and scope: `user` (top-level `mcpServers` in `~/.claude.json`), `local` (a `projects.<path>.mcpServers` entry), `project` (`.mcp.json`).
+   - If any are found, output, once per entry:
+     "Found a leftover Codex MCP server `<name>` (<scope> scope, <file>). cross-model-review uses the Codex CLI, not this server, and the leftover entry can fail to connect and leak `codex.exe` processes on Windows. Remove it with: `claude mcp remove <name> -s <scope>`"
+     For a `local` entry under a different project's path, print `cd <path> && claude mcp remove <name> -s local` instead (`-s local` acts on the project you run it from). For an entry only in `~/.claude/mcp_servers.json`, tell the user to delete that entry from the file instead (no `claude mcp` scope covers it).
+   - Do NOT run `claude mcp remove` or edit any of these files yourself — setup only reports. Continue (warn, don't exit).
+   - If none are found → continue silently.
 
 2. **Verify Superpowers plugin.** Check whether `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:subagent-driven-development` skills are available. If absent:
    - Output: "Superpowers plugin not detected. Install via `/plugin install superpowers@superpowers-marketplace`. Re-run `/cross-model-setup` afterward."
@@ -107,7 +117,14 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
      - For EACH planned rule file:
        - Check if file exists.
        - If absent → write the rule body verbatim.
-       - If present → skip silently.
+       - If present AND it is `.claude/hookify.cross-model-plan-review.local.md`
+         AND its `pattern:` line, after trimming whitespace, is exactly the v0.4.1-and-earlier pattern
+         `(saved to docs/plans/|plan complete|design doc written)` → rewrite
+         it with the File 1 body below (that pattern misses superpowers ≥5,
+         which saves to `docs/superpowers/`). Count it as written and output
+         "Updated the plan-review nudge for superpowers 5+ paths." Any other
+         content (user-edited) → leave it alone.
+       - If present otherwise → skip silently.
      - No "if all exist" early-exit; future rule additions land cleanly.
      - **NOTE for maintainers:** the rule files listed below must stay
        in sync with the `PLANNED` array in `commands/cross-model-status.md`
@@ -126,10 +143,11 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
    conditions:
      - field: transcript
        operator: regex_match
-       pattern: (saved to docs/plans/|plan complete|design doc written)
+       pattern: (saved to `?docs/(superpowers/)?(specs|plans)/|[Pp]lan complete|[Ss]pec written|design doc written)
    ---
 
-   Reminder: a plan or design doc was recently saved to `docs/plans/`. If this is
+   Reminder: a plan or design doc was recently saved (to `docs/superpowers/specs/`,
+   `docs/superpowers/plans/`, or legacy `docs/plans/`). If this is
    a code-touching artifact and Codex review hasn't been invoked, consider
    invoking `cross-model-review:codex-plan-review` now. If you skipped it
    intentionally or it's not applicable (non-code plan), ignore this nudge.
@@ -166,4 +184,4 @@ First-run setup wizard. Verifies the plugin's environment and prints (optionally
 
 9. **Suggest per-project notes (optional).** "If this project is a mixed-content repo (some content work, some code work — e.g., a website with a blog), add a per-project CLAUDE.md note. See README.md for an example."
 
-10. **Idempotent:** running this multiple times just re-checks status. Doesn't double-write the CLAUDE.md section, doesn't re-create existing labels (filtered as "already exists" in step 7), doesn't overwrite existing hookify rule files (per-rule check in step 8).
+10. **Idempotent:** running this multiple times just re-checks status. Doesn't double-write the CLAUDE.md section, doesn't re-create existing labels (filtered as "already exists" in step 7), doesn't overwrite existing hookify rule files (per-rule check in step 8; the one exception is the unedited v0.4.1 plan-review rule, upgraded once), and never removes MCP servers (step 1.5 only reports).

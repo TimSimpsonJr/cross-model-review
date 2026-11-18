@@ -121,8 +121,11 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
    Skip flag:      NOT ARMED | ARMED  (next review trigger will be suppressed)
 
    In-flight Codex reviews (if state.codex_reviews_in_progress is non-empty):
-      - <kind> on <chain_artifact> (branch <branch>, elapsed <Hh Mm Ss>, bg_id <bash_id>, status <in_progress|detached|stale_thread_error>)
+      - <kind> on <chain_artifact> (branch <branch>, elapsed <Hh Mm Ss>, bg_id <bash_id>, status <in_progress|detached|stale_thread_error|usage_limit>)
       - (repeat per entry)
+      For a failed entry, add one line under it explaining the status:
+        stale_thread_error → "Codex thread expired. Start a fresh review with /cross-model-review-now <kind>."
+        usage_limit        → "Codex hit its usage limit; the thread is fine. Retry with /cross-model-review-now <kind> once the limit resets."
 
    Hooks: <hooks_line from step 5>
 
@@ -152,8 +155,9 @@ Diagnostic report. Reads current plugin state and surfaces it in human-readable 
       No persisted state file present. Either no cross-model-review activity has
       occurred yet in this project, OR `.claude/` is not writable.
 
-      If `.claude/` is writable, frontmatter resume from docs/plans/ is available
-      for the next review (auto-resume when exactly one candidate exists).
+      If `.claude/` is writable, frontmatter resume from docs/superpowers/specs/,
+      docs/superpowers/plans/, or legacy docs/plans/ is available for the next
+      review (auto-resume when exactly one candidate exists).
 
       If `.claude/` is NOT writable, invoking a cross-model-review skill here will
       halt with a chat note explaining the persisted-mode requirement. v0.3.0 does
