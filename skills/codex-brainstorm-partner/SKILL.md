@@ -115,11 +115,11 @@ Brainstorm-partner is opt-in and turn-based:
 
 2. **Read `.claude/cross-model-review.session.local.md`.** Any "write fresh state file" path below emits `filed_issues: []` and `context_limit_tokens: 200000` per the writer contract above.
    - If the state file is absent, apply the frontmatter-resume disambiguation rule:
-     - Search `docs/plans/` on the current branch for design/plan docs whose frontmatter contains `codex_thread_id`.
+     - Search all three plan-doc roots on the current branch — `docs/superpowers/specs/` and `docs/superpowers/plans/` (superpowers ≥5) plus legacy `docs/plans/` (superpowers ≤4.3) — for design/plan docs whose frontmatter contains `codex_thread_id`.
      - Filter to candidates within last 24h OR matching the branch's most-recent commits.
      - If exactly ONE candidate → set `state.codex_thread_id` to its frontmatter thread_id; the next CLI call will be a `codex exec resume` continuation (stale-thread detection in the bg-completion handler covers expired-thread cases).
      - If ZERO candidates → write fresh state file with defaults; the first `codex exec` call this project makes will create a new thread.
-     - If MULTIPLE candidates → write fresh state file with defaults; post chat note: "Multiple design/plan docs in `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact."
+     - If MULTIPLE candidates → write fresh state file with defaults; post chat note: "Multiple design/plan docs in `docs/superpowers/` or `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind> <path>` to manually resume from a specific artifact."
 
 3. **Pre-upgrade chain detection.** After loading state in step 2, classify the chain regime:
    - State file was just created fresh in step 2 → set `regime = new`. The fresh-state write already emitted `filed_issues: []` per the writer contract.
@@ -251,15 +251,34 @@ When a Bash bg job's completion notification arrives in a future turn:
 2. **Fallback for the launch race**: if no direct match, scan slots where `bg_id == "pending"` AND `result_file` exists on disk. If exactly one matches, use it.
 3. If still no match: this notification is for an unrelated bg job. Ignore.
 4. **Branch on `status`:**
-   - `status == "detached"` (user ran `/cross-model-reset` mid-stand-in): inspect result file; post a chat note per the four cases (non-empty / missing-or-empty / stale-thread / corrupt) per the pattern in `codex-plan-review`. Remove the slot. Brainstorming continues without this stand-in input (parent skill resumes when user provides actual input).
+   - `status == "detached"` (user ran `/cross-model-reset` mid-stand-in): inspect result file; post a chat note per the cases in `codex-plan-review` (non-empty; otherwise run the **Empty-result failure classifier** below → usage-limit / stale-thread / missing-or-empty / corrupt). Remove the slot. Brainstorming continues without this stand-in input (parent skill resumes when user provides actual input).
    - `status == "in_progress"`: proceed to step 5.
 5. **Classify the outcome by positive evidence first.** Read `result_file`.
    - **If `result_file` is non-empty and usable as a reply → treat as SUCCESS,** regardless of any stderr substrings. If `stderr_file` also contains `"failed to record rollout items"`, post a soft chat note: *"Codex emitted a rollout-recording error during this turn; its reply is complete, but a later resume of this thread could be degraded."* Take NO state action. Proceed to step 6.
-   - **Only if `result_file` is empty or unusable:** scan `result_file`, `jsonl_file`, `stderr_file` for `"Session not found for thread_id"` / `"thread not found"`. If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Brainstorming continues with Claude only for this question."* Set slot's `status: "stale_thread_error"`, remove the slot, and continue with Claude only. Do NOT auto-recover.
+   - **Only if `result_file` is empty or unusable:** run the **Empty-result failure classifier** (after step 9) and act on its verdict:
+     - `usage_limit` → post chat note *"Codex is unavailable right now (usage limit). The thread is fine; brainstorming continues with Claude only for this question, and Codex can stand in again once the limit resets."* (If `attempted_thread_id` is null, drop "The thread is fine;".) Set slot's `status: "usage_limit"`, remove the slot, and continue with Claude only. Do NOT clear `state.codex_thread_id`: the thread is intact.
+     - `stale_thread` → post chat note *"Codex thread `<attempted_thread_id>` has expired. Brainstorming continues with Claude only for this question."* Set slot's `status: "stale_thread_error"`, remove the slot, and continue with Claude only. Do NOT auto-recover.
+     - `other` → post a chat note that the Codex stand-in failed (see stderr at `<stderr_file>`), remove the slot, and continue with Claude only.
 6. **Read `result_file`** — Codex's reply, formatted as if it were the user's response.
 7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (fresh-thread case only) and persist to `state.codex_thread_id` if it was the first call.
 8. **Remove the slot** from `codex_reviews_in_progress`.
 9. **Feed Codex's reply to the brainstorming flow** as the "user's response" to the prior question. The parent `superpowers:brainstorming` skill picks up from its waiting state and continues with the next question.
+
+<!-- lockstep:empty-result-classifier:start (byte-identical in all 3 skills) -->
+**Empty-result failure classifier.** Run this only when `result_file` is missing, empty, or unusable (step 5's failure path, and the detached cases in step 4). Work through it in order and stop at the first verdict that matches:
+
+a. **Drop the harmless rollout line first.** Ignore every line of `jsonl_file` and `stderr_file` that contains `failed to record rollout items`. It is a cosmetic upstream log ([openai/codex#19475](https://github.com/openai/codex/issues/19475)) whose text includes `thread <id> not found`, so it must never reach steps b and c. It says nothing about why the turn failed.
+
+Steps b and c look only at **error text**: the remaining lines of `stderr_file`, plus the `message` of `"type":"error"` events and the `error.message` of `"type":"turn.failed"` events in `jsonl_file`. Never scan `result_file` or other jsonl events (agent messages, command output): Codex may quote a file that happens to contain these phrases.
+
+b. **`usage_limit`** — checked before the stale-thread scan, because a usage limit leaves the thread intact. Match if any holds (all substring matches case-insensitive):
+   - the `turn.failed` message, an `error` event message, or a remaining `stderr_file` line contains `usage limit`, `quota exceeded`, `spend cap`, or `out of credits`; or
+   - the `turn.failed` message (the turn's final error, not an earlier `error` event the turn may have recovered from) contains `rate limit`, `429 Too Many Requests`, or `exceeded retry limit, last status: 429`.
+
+   A `turn.failed` event on its own is NOT enough: Codex emits one for every failed turn. The markers come from the Codex CLI source (`codex-rs/protocol/src/error.rs`, checked at 0.125.0, 0.151.0 and 0.170.0): `You've hit your usage limit…` (straight apostrophe through 0.151, curly `You’ve` by 0.170, so match on `usage limit`, never on the apostrophe), `Quota exceeded. Check your plan and billing details.`, `You hit your spend cap…` and `Your workspace is out of credits…` (newer builds only), the retry-exhausted `exceeded retry limit, last status: 429 Too Many Requests`, and an API `Rate limit reached for model …`. Retry notices such as `Reconnecting... 2/5 (…)` arrive as `error` events even when the turn later recovers, which is why `rate limit` and `429` count only in the final `turn.failed` message. Wording can drift across Codex releases: an unrecognized usage-limit message falls to `other` (generic failure handling), not to `stale_thread`, because step a already removed the rollout line that used to cause that misreport.
+c. **`stale_thread`** — that error text contains `Session not found for thread_id`, `no rollout found for thread id`, or `thread not found`. (Fuzzy signal: the Codex CLI documents no stable error contract for an expired thread.)
+d. **`other`** — nothing above matched.
+<!-- lockstep:empty-result-classifier:end -->
 
 ## Response handling (semantic content)
 
@@ -291,4 +310,4 @@ After every invocation:
 
 - **Codex CLI not on PATH** (caught at launch time via `which codex` if the skill body opts to check, or surfaced by Bash exit code on launch): post chat note *"Codex CLI not available; brainstorming continues with Claude only. Install via `npm install -g @openai/codex`."* Skill exits silently. NOT a halt scenario — brainstorm-partner is opt-in collaboration, not a gate.
 - **Bash launch failed** (non-zero exit on the Bash invocation itself): post chat note describing the failure; remove the pre-written slot from `state.codex_reviews_in_progress`; brainstorming continues with Claude only.
-- **Stale-thread error in bg result** (per step 5 of On bg completion): brainstorming continues with Claude only for the affected question.
+- **Stale-thread error or usage limit in bg result** (per step 5 of On bg completion): brainstorming continues with Claude only for the affected question.

@@ -1,6 +1,6 @@
 ---
 name: codex-plan-review
-description: Use immediately after a design doc is written to docs/plans/ before invoking writing-plans, OR immediately after writing-plans saves an implementation plan. Reviews the artifact adversarially via Codex (async CLI). Triggers on phrases like "design doc written", "design saved to docs/plans/", "plan complete", "plan saved to docs/plans/", "ready for implementation", "ready to write the plan".
+description: Use immediately after a design doc is written (docs/superpowers/specs/ on superpowers 5+, docs/plans/ on older versions) before invoking writing-plans, OR immediately after writing-plans saves an implementation plan (docs/superpowers/plans/ or docs/plans/). Reviews the artifact adversarially via Codex (async CLI). Triggers on phrases like "design doc written", "spec written", "spec committed", "spec saved to docs/superpowers/specs/", "design saved to docs/plans/", "plan complete", "plan saved to docs/superpowers/plans/", "plan saved to docs/plans/", "ready for implementation", "ready to write the plan".
 ---
 
 # codex-plan-review
@@ -15,11 +15,11 @@ Adversarial review of design docs and implementation plans by Codex via async CL
 
 ## Determining mode
 
-If you got here right after `brainstorming` wrote a design doc to `docs/plans/`:
+If you got here right after `brainstorming` wrote a design doc (superpowers ≥5: `docs/superpowers/specs/`; ≤4.3: `docs/plans/`; or wherever brainstorming announced it):
 - Mode: `design-review`
-- Artifact: the just-written design doc (`docs/plans/<latest>-design.md`)
+- Artifact: the just-written design doc (e.g. `docs/superpowers/specs/<latest>-design.md` or legacy `docs/plans/<latest>-design.md`)
 
-If you got here right after `writing-plans` wrote a plan doc to `docs/plans/`:
+If you got here right after `writing-plans` wrote a plan doc (superpowers ≥5: `docs/superpowers/plans/`; ≤4.3: `docs/plans/`; or wherever writing-plans announced it):
 - Mode: `plan-review`
 - Artifact: the just-written plan doc
 
@@ -126,7 +126,9 @@ say so explicitly and ask Claude to provide what you need.
    If absent, check for frontmatter resume. (Any "write fresh state file" path
    below emits `filed_issues: []` and `context_limit_tokens: 200000` per the
    writer contract above.)
-   - Search `docs/plans/` on the current branch for design/plan docs whose
+   - Search all three plan-doc roots on the current branch —
+     `docs/superpowers/specs/` and `docs/superpowers/plans/` (superpowers ≥5)
+     plus legacy `docs/plans/` (superpowers ≤4.3) — for design/plan docs whose
      frontmatter contains `codex_thread_id`.
    - Filter to candidates within last 24h OR matching the branch's
      most-recent commits.
@@ -138,8 +140,8 @@ say so explicitly and ask Claude to provide what you need.
    - If ZERO candidates → write fresh state file with defaults; the first
      `codex exec` call this project makes will create a new thread.
    - If MULTIPLE candidates → write fresh state file with defaults; post
-     chat note: "Multiple design/plan docs in `docs/plans/` could match
-     this branch. Not auto-resuming. Use `/cross-model-review-now <kind>
+     chat note: "Multiple design/plan docs in `docs/superpowers/` or
+     `docs/plans/` could match this branch. Not auto-resuming. Use `/cross-model-review-now <kind>
      <path>` to manually resume from a specific artifact."
 
 2.5. **Pre-upgrade chain detection.** After loading state in step 2, classify
@@ -431,15 +433,22 @@ When a Bash bg job's completion notification arrives in a future turn (after thi
 2. **Fallback for the launch race**: if no direct match, scan slots where `bg_id == "pending"` AND `result_file` exists on disk. If exactly one matches, use it. If multiple match, choose the oldest by `started_at`. (Imperfect when multiple races coincide; acceptable for v0.3.0.)
 3. If still no match: this notification is for an unrelated bg job (e.g., the user's own Bash). Ignore.
 4. **Branch on `status`:**
-   - `status == "detached"` (user ran `/cross-model-reset` mid-review): inspect the result file's state and surface a chat note per the four cases below, then remove the slot. Do NOT route findings — the user reset specifically to walk away.
-     - **Non-empty result + no stale-thread markers**: *"Detached `<kind>` review for `<chain-artifact>` completed; result at `<result_file>`. Findings NOT routed — review manually if useful."*
-     - **Result missing or empty**: *"Detached `<kind>` review for `<chain-artifact>` ended with no usable result. See stderr at `<stderr_file>`."*
-     - **Stale-thread error in jsonl/stderr**: *"Detached `<kind>` review for `<chain-artifact>` failed: Codex thread `<attempted_thread_id>` expired. No action needed."*
-     - **Result file non-empty but unparseable as findings**: *"Detached `<kind>` review for `<chain-artifact>` completed with corrupt output at `<result_file>`. See stderr at `<stderr_file>`."*
+   - `status == "detached"` (user ran `/cross-model-reset` mid-review): inspect the result file's state and surface a chat note per the cases below, then remove the slot. Do NOT route findings — the user reset specifically to walk away.
+     - **Non-empty result, parseable as findings**: *"Detached `<kind>` review for `<chain-artifact>` completed; result at `<result_file>`. Findings NOT routed — review manually if useful."*
+     - **Result missing, empty, or unparseable** → run the **Empty-result failure classifier** below:
+       - `usage_limit`: *"Detached `<kind>` review for `<chain-artifact>` stopped: Codex hit its usage limit. No action needed."*
+       - `stale_thread`: *"Detached `<kind>` review for `<chain-artifact>` failed: Codex thread `<attempted_thread_id>` expired. No action needed."*
+       - `other`, result missing or empty: *"Detached `<kind>` review for `<chain-artifact>` ended with no usable result. See stderr at `<stderr_file>`."*
+       - `other`, result non-empty but unparseable: *"Detached `<kind>` review for `<chain-artifact>` completed with corrupt output at `<result_file>`. See stderr at `<stderr_file>`."*
    - `status == "in_progress"`: proceed to step 5.
 5. **Classify the outcome by positive evidence first.** Read `result_file`.
    - **If `result_file` is non-empty and parseable as findings → treat as SUCCESS,** regardless of any stderr substrings. Additionally, if `stderr_file` contains `"failed to record rollout items"`, post a soft chat note: *"Codex emitted a rollout-recording error during this review (`failed to record rollout items`). The findings are complete, but this Codex thread's last turn may not have been persisted, so a later resume of it could be degraded."* Take NO state action. Proceed to step 6.
-   - **Only if `result_file` is empty or unparseable as findings:** scan `result_file`, `jsonl_file`, and `stderr_file` via allowlisted substring matching for stale-thread patterns Codex emits when `codex exec resume` fails — currently observed: `"Session not found for thread_id"` and `"thread not found"`. (The Codex CLI does not document a stable machine-readable error contract for this case as of v0.125.0; treat as a fuzzy signal subject to drift.) If detected, post chat note *"Codex thread `<attempted_thread_id>` has expired. Start a fresh review with `/cross-model-review-now <kind>` (the plugin will create a new thread)."* Set slot's `status: "stale_thread_error"` so `/cross-model-status` can explain. Do NOT auto-recover in v0.3.0. If no stale-thread pattern matches either, fall through to generic failure handling.
+   - **Only if `result_file` is empty or unparseable as findings:** run the **Empty-result failure classifier** (after step 12) and act on its verdict:
+     - `usage_limit` → post chat note *"Codex is unavailable right now (usage limit). The thread is fine; retry with `/cross-model-review-now <kind>` once the limit resets."* (If `attempted_thread_id` is null, this was a fresh-thread call with no saved thread: drop "The thread is fine;".) Set slot's `status: "usage_limit"` so `/cross-model-status` can explain. Do NOT clear `state.codex_thread_id` or the artifact's frontmatter `codex_thread_id`: the thread is intact, and the retry resumes it.
+     - `stale_thread` → post chat note *"Codex thread `<attempted_thread_id>` has expired. Start a fresh review with `/cross-model-review-now <kind>` (the plugin will create a new thread)."* Set slot's `status: "stale_thread_error"` so `/cross-model-status` can explain. Do NOT auto-recover in v0.3.0.
+     - `other` → fall through to generic failure handling.
+
+     After a `usage_limit` or `stale_thread` verdict, stop here: skip steps 6–12 (nothing to route) and leave the slot in place with its new status. A non-`in_progress` slot does not block a retry (the duplicate guards only match `status: in_progress`), and `/cross-model-status` shows it until `/cross-model-reset` clears it.
 6. **Read `result_file`** — Codex's final structured review. (On the success path it was already read in step 5; this step parses/uses that content.)
 7. **Extract `thread_id`** from `jsonl_file`'s `thread.started` event (only present on fresh-thread calls; on resume calls the thread_id equals `attempted_thread_id`).
 8. **Persist `thread_id`** to the relevant artifact's frontmatter and to `state.codex_thread_id` if this was the first review for the chain. Existing singleton fields (`codex_thread_id`, `active_chain_artifact`, `active_chain_branch`) retain their semantics: they represent the *most-recently-completed* chain; in-flight state lives in `codex_reviews_in_progress`.
@@ -447,6 +456,22 @@ When a Bash bg job's completion notification arrives in a future turn (after thi
 10. **Parse findings** per the tag-line spec below.
 11. **Route findings** per the routing logic below.
 12. **If the loop continues** (revisions dispatched, Codex didn't approve), the next iteration is another async-CLI call via the **Codex async CLI call** section above.
+
+<!-- lockstep:empty-result-classifier:start (byte-identical in all 3 skills) -->
+**Empty-result failure classifier.** Run this only when `result_file` is missing, empty, or unusable (step 5's failure path, and the detached cases in step 4). Work through it in order and stop at the first verdict that matches:
+
+a. **Drop the harmless rollout line first.** Ignore every line of `jsonl_file` and `stderr_file` that contains `failed to record rollout items`. It is a cosmetic upstream log ([openai/codex#19475](https://github.com/openai/codex/issues/19475)) whose text includes `thread <id> not found`, so it must never reach steps b and c. It says nothing about why the turn failed.
+
+Steps b and c look only at **error text**: the remaining lines of `stderr_file`, plus the `message` of `"type":"error"` events and the `error.message` of `"type":"turn.failed"` events in `jsonl_file`. Never scan `result_file` or other jsonl events (agent messages, command output): Codex may quote a file that happens to contain these phrases.
+
+b. **`usage_limit`** — checked before the stale-thread scan, because a usage limit leaves the thread intact. Match if any holds (all substring matches case-insensitive):
+   - the `turn.failed` message, an `error` event message, or a remaining `stderr_file` line contains `usage limit`, `quota exceeded`, `spend cap`, or `out of credits`; or
+   - the `turn.failed` message (the turn's final error, not an earlier `error` event the turn may have recovered from) contains `rate limit`, `429 Too Many Requests`, or `exceeded retry limit, last status: 429`.
+
+   A `turn.failed` event on its own is NOT enough: Codex emits one for every failed turn. The markers come from the Codex CLI source (`codex-rs/protocol/src/error.rs`, checked at 0.125.0, 0.151.0 and 0.170.0): `You've hit your usage limit…` (straight apostrophe through 0.151, curly `You’ve` by 0.170, so match on `usage limit`, never on the apostrophe), `Quota exceeded. Check your plan and billing details.`, `You hit your spend cap…` and `Your workspace is out of credits…` (newer builds only), the retry-exhausted `exceeded retry limit, last status: 429 Too Many Requests`, and an API `Rate limit reached for model …`. Retry notices such as `Reconnecting... 2/5 (…)` arrive as `error` events even when the turn later recovers, which is why `rate limit` and `429` count only in the final `turn.failed` message. Wording can drift across Codex releases: an unrecognized usage-limit message falls to `other` (generic failure handling), not to `stale_thread`, because step a already removed the rollout line that used to cause that misreport.
+c. **`stale_thread`** — that error text contains `Session not found for thread_id`, `no rollout found for thread id`, or `thread not found`. (Fuzzy signal: the Codex CLI documents no stable error contract for an expired thread.)
+d. **`other`** — nothing above matched.
+<!-- lockstep:empty-result-classifier:end -->
 
 ### Tag-line parser
 

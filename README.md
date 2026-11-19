@@ -2,7 +2,7 @@
 
 Claude Code plugin that integrates Codex as an adversarial reviewer in the Superpowers workflow. Eliminates manual copy-paste between Claude and Codex during design / plan / implementation review steps. Supports overnight autonomous code-fix sessions where Claude+Codex consensus replaces user approval at code-only decision gates.
 
-**Status:** v0.4.1
+**Status:** v0.4.2
 
 **v0.3.0 architecture note:** the plugin invokes Codex via the `codex exec` CLI through Bash with `run_in_background: true`, NOT via the Codex MCP server (which v0.1/v0.2 used). The change is to sidestep Claude Code's UI watchdog, which kills synchronous MCP tool calls that block its worker for ~10–12 min — below what reasoning-heavy Codex calls realistically need at `xhigh` reasoning effort. See [anthropics/claude-code#58480](https://github.com/anthropics/claude-code/issues/58480).
 
@@ -32,7 +32,7 @@ Then run `/cross-model-setup` to verify the Codex CLI is installed, apply the gl
 **v0.2 → v0.3 upgrade** (architectural — async CLI instead of MCP):
 
 - The plugin no longer uses the Codex MCP server. It uses the `codex` CLI directly via Bash's `run_in_background: true`. Install or upgrade Codex CLI via `npm install -g @openai/codex` (you likely already have it — the MCP server was bundled with the same package).
-- If you previously configured Codex as an MCP server in `~/.claude/mcp_servers.json` or per-project `.mcp.json`, you can leave that entry alone (it's unused but not harmful) or remove it.
+- If you previously configured Codex as an MCP server (`codex mcp-server`, in `~/.claude.json`, `~/.claude/mcp_servers.json`, or a project's `.mcp.json`), **remove it**: `claude mcp remove <name> -s <scope>` (use the scope it was added at: `user`, `local`, or `project`). The plugin never uses it, and a leftover entry is not harmless: on Windows it can fail to connect, leak a `codex.exe` process per session, and lead agents to call `mcp__codex__*` tools instead of the plugin's CLI flow. `/cross-model-setup` reports any leftover entry and prints the exact command, but removes nothing itself.
 - Re-run `/cross-model-setup` after upgrading — the verification step now checks for the CLI instead of the MCP server.
 - **Known regressions vs. v0.2:** no auto-recovery from expired Codex threads (user manually retries via `/cross-model-review-now <kind>` on "Session not found" errors); no cancel-and-kill for in-flight reviews (`/cross-model-reset` uses detach semantics instead); ephemeral / read-only-filesystem mode is no longer supported for async reviews (use a normal persisted project context). See CHANGELOG for details.
 
@@ -55,7 +55,7 @@ Natural-language phrases also route to commands — see CLAUDE.md additions prin
 ## Requirements
 
 - Claude Code with plugin support
-- `superpowers` plugin installed (provides brainstorming, writing-plans, subagent-driven-development)
+- `superpowers` plugin installed (provides brainstorming, writing-plans, subagent-driven-development). Both artifact layouts are supported: superpowers ≥5 (`docs/superpowers/specs/` for designs, `docs/superpowers/plans/` for plans) and the legacy ≤4.3 `docs/plans/`.
 - Codex CLI ≥ 0.125.0 on `PATH` (`npm install -g @openai/codex`)
 - Writable `.claude/` directory in your project (v0.3.0 requires persisted state for async reviews; ephemeral / projectless mode is unsupported)
 - *Optional:* `hookify` plugin — enables Layer 3 backup nudges at Stop events. The plugin works without it; skill bodies and CLAUDE.md routing (Layers 1+2) still carry the load.
@@ -77,7 +77,10 @@ Codex reviews run under a sandbox selected by the host OS (auto-detected via `un
   `/cross-model-status`.
 - A `failed to record rollout items` line in Codex's stderr is a **harmless known bug**
   ([openai/codex#19475](https://github.com/openai/codex/issues/19475), fixed after 0.125.0);
-  reviews and `codex exec resume` work despite it.
+  reviews and `codex exec resume` work despite it, and the plugin ignores it when working
+  out why a review failed.
+- If Codex hits its **usage limit** mid-review, the plugin says so and keeps the thread:
+  retry with `/cross-model-review-now <kind>` once the limit resets.
 
 Once #57 is fixed upstream, Windows can return to `read-only`; upgrading Codex past 0.125.0
 is recommended when that lands.

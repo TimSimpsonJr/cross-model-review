@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.2 — 2026-11-18
+
+### Fixed
+- **#12 — superpowers 5+/6 artifact paths.** superpowers ≥5.0 writes design docs to
+  `docs/superpowers/specs/` and plans to `docs/superpowers/plans/`; the plugin only looked in
+  `docs/plans/`. Frontmatter resume (all 3 skills), the `/cross-model-review-now` resolver,
+  `/cross-model-status`, the trigger phrases, and the Stop-hook nudge now cover all three
+  roots, with `docs/plans/` kept for pre-v5 chains. The Stop-hook regex now matches
+  superpowers 5+ output (`Spec written and committed…`, ``Plan complete and saved to `docs/superpowers/plans/…` ``);
+  `/cross-model-setup` upgrades an unedited v0.4.1 plan-review rule in place.
+  `/cross-model-review-now design <path>` now honors the explicit path before the active chain.
+- **#11 — failures misreported as expired threads.** An empty result used to be scanned
+  for `thread not found`, which the harmless `failed to record rollout items: thread <id> not
+  found` log line also contains, so every empty-result failure (usage limit, network, crash)
+  read as an expired thread. A new lockstep **empty-result failure classifier** (all 3
+  skills) drops that line first, looks only at error text (stderr plus `error` /
+  `turn.failed` event messages, never Codex's own prose or command output), checks for a
+  Codex usage limit before anything else, and only then matches stale threads. A usage limit is reported as
+  "Codex is unavailable right now (usage limit). The thread is fine…", sets slot status
+  `usage_limit`, and keeps the thread id; `/cross-model-status` explains the new status.
+
+### Changed
+- **Leftover Codex MCP server: remove it.** README and `/cross-model-setup` no longer call a
+  leftover `codex mcp-server` entry harmless (on Windows it can fail to connect and leak a
+  `codex.exe` per session). Setup step 1.5 reads the MCP config files (not `claude mcp list`,
+  which would launch the server to health-check it) and reports any such entry with the
+  exact `claude mcp remove <name> -s <scope>` command; it removes nothing itself.
+
+### Notes
+- Usage-limit markers were checked against the Codex CLI source at 0.125.0, 0.151.0 and
+  0.170.0 (`codex-rs/protocol/src/error.rs`, `codex-rs/exec/src/exec_events.rs`) and against
+  the strings in the 0.170.0 binary, not a captured usage-limit failure. The usage-limit
+  apostrophe changed from straight to curly between releases, so the classifier matches on
+  `usage limit`. An unmatched failure falls to generic handling, never to "expired thread".
+
 ## 0.4.1 — 2026-06-11
 
 ### Fixed
